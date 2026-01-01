@@ -76,23 +76,24 @@ pads_state = arena.get_pads_state_array()     # shape (M,)
 # [24]: is_supersonic
 ```
 
-## Callbacks
+## Callbacks (mtheall-compatible API)
 
 ```python
-# Goal scored callback
-def on_goal(team):  # team: 0=blue, 1=orange
-    print(f"Goal scored by team {team}!")
-arena.set_goal_callback(on_goal)
+# Goal scored callback - called with keyword arguments
+def on_goal(arena, scoring_team, data):
+    print(f"Goal scored by {scoring_team}!")  # Team.BLUE or Team.ORANGE
 
-# Car bump callback
-def on_bump(bumper_id, victim_id, is_demo):
-    print(f"Car {bumper_id} bumped {victim_id}, demo={is_demo}")
-arena.set_bump_callback(on_bump)
+# Returns previous (callback, data) tuple
+prev = arena.set_goal_score_callback(on_goal, my_data)
 
-# Demo-only callback
-def on_demo(bumper_id, victim_id):
-    print(f"Car {bumper_id} demoed {victim_id}!")
-arena.set_demo_callback(on_demo)
+# Car bump/demo callback - called with keyword arguments
+def on_bump(arena, bumper, victim, is_demo, data):
+    if is_demo:
+        print(f"Car {bumper.id} demoed {victim.id}!")
+    else:
+        print(f"Car {bumper.id} bumped {victim.id}")
+
+prev = arena.set_car_bump_callback(on_bump, my_data)
 ```
 
 ## API Reference

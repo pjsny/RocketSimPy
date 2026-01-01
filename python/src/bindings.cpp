@@ -79,10 +79,12 @@ struct ArenaWrapper {
     };
     std::unordered_map<uint32_t, CarStats> car_stats;
     
-    // Python callbacks (stored to prevent GC)
-    nb::object goal_callback;
-    nb::object bump_callback;
-    nb::object demo_callback;
+    // Python callbacks (stored to prevent GC) - mtheall-compatible API
+    // Each callback stores (callback, data) tuple
+    nb::object goal_score_callback;
+    nb::object goal_score_data;
+    nb::object car_bump_callback;
+    nb::object car_bump_data;
     
     // Reusable gym state buffer
     GymState gym_state;
@@ -105,35 +107,38 @@ struct ArenaWrapper {
             } else {
                 self->orange_score++;
             }
-            // Call Python callback if set
-            if (self->goal_callback) {
+            // Call Python callback if set - mtheall API: callback(arena, scoring_team, data)
+            if (self->goal_score_callback) {
                 nb::gil_scoped_acquire gil;
                 try {
-                    self->goal_callback(static_cast<int>(team));
+                    self->goal_score_callback(
+                        "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                        "scoring_team"_a = team,
+                        "data"_a = self->goal_score_data
+                    );
                 } catch (...) {}
             }
         }, this);
         
-        // Car bump/demo callback
+        // Car bump/demo callback - mtheall API: callback(arena, bumper, victim, is_demo, data)
         arena->SetCarBumpCallback([](Arena* a, Car* bumper, Car* victim, bool isDemo, void* userInfo) {
             auto* self = static_cast<ArenaWrapper*>(userInfo);
             
             if (isDemo) {
                 self->car_stats[bumper->id].demos++;
-                // Call demo callback if set
-                if (self->demo_callback) {
-                    nb::gil_scoped_acquire gil;
-                    try {
-                        self->demo_callback(bumper->id, victim->id);
-                    } catch (...) {}
-                }
             }
             
             // Call bump callback if set
-            if (self->bump_callback) {
+            if (self->car_bump_callback) {
                 nb::gil_scoped_acquire gil;
                 try {
-                    self->bump_callback(bumper->id, victim->id, isDemo);
+                    self->car_bump_callback(
+                        "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                        "bumper"_a = nb::cast(bumper, nb::rv_policy::reference),
+                        "victim"_a = nb::cast(victim, nb::rv_policy::reference),
+                        "is_demo"_a = isDemo,
+                        "data"_a = self->car_bump_data
+                    );
                 } catch (...) {}
             }
         }, this);
@@ -200,9 +205,10 @@ struct ArenaWrapper {
         
         // Copy Python callbacks if requested
         if (copy_callbacks) {
-            cloned->goal_callback = goal_callback;
-            cloned->bump_callback = bump_callback;
-            cloned->demo_callback = demo_callback;
+            cloned->goal_score_callback = goal_score_callback;
+            cloned->goal_score_data = goal_score_data;
+            cloned->car_bump_callback = car_bump_callback;
+            cloned->car_bump_data = car_bump_data;
         }
         return cloned;
     }
@@ -668,16 +674,23 @@ NB_MODULE(RocketSim, m) {
             auto it = a->car_stats.find(car_id);
             return it != a->car_stats.end() ? it->second.boost_pickups : 0;
         }, "car_id"_a)
-        // Callbacks
-        .def("set_goal_callback", [](ArenaWrapper* a, nb::object callback) {
-            a->goal_callback = callback;
-        }, "callback"_a)
-        .def("set_bump_callback", [](ArenaWrapper* a, nb::object callback) {
-            a->bump_callback = callback;
-        }, "callback"_a)
-        .def("set_demo_callback", [](ArenaWrapper* a, nb::object callback) {
-            a->demo_callback = callback;
-        }, "callback"_a)
+        // Callbacks - mtheall-compatible API
+        .def("set_goal_score_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            nb::object prev_cb = a->goal_score_callback ? a->goal_score_callback : nb::none();
+            nb::object prev_data = a->goal_score_data ? a->goal_score_data : nb::none();
+            a->goal_score_callback = callback;
+            a->goal_score_data = data;
+            return nb::make_tuple(prev_cb, prev_data);
+        }, "callback"_a, "data"_a = nb::none(),
+           "Set goal score callback. callback(arena, scoring_team, data) called with kwargs. Returns previous (callback, data).")
+        .def("set_car_bump_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            nb::object prev_cb = a->car_bump_callback ? a->car_bump_callback : nb::none();
+            nb::object prev_data = a->car_bump_data ? a->car_bump_data : nb::none();
+            a->car_bump_callback = callback;
+            a->car_bump_data = data;
+            return nb::make_tuple(prev_cb, prev_data);
+        }, "callback"_a, "data"_a = nb::none(),
+           "Set car bump callback. callback(arena, bumper, victim, is_demo, data) called with kwargs. Returns previous (callback, data).")
         // ====== EFFICIENT GYM STATE GETTERS ======
         .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
              "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")

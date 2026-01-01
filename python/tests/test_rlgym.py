@@ -27,38 +27,46 @@ class TestScoreTracking:
 
 
 class TestCallbacks:
-    """Test Python callbacks for game events."""
+    """Test Python callbacks for game events - mtheall-compatible API."""
 
-    def test_goal_callback_is_set(self):
-        """Goal callback can be set without error."""
+    def test_goal_score_callback_is_set(self):
+        """Goal score callback can be set without error."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         callback_called = []
 
-        def on_goal(team):
-            callback_called.append(team)
+        def on_goal(arena, scoring_team, data):
+            callback_called.append((scoring_team, data))
 
-        arena.set_goal_callback(on_goal)
-        # Just verify no error - actual goal scoring would need full game sim
+        prev = arena.set_goal_score_callback(on_goal, "test_data")
+        assert prev == (None, None)  # No previous callback
 
-    def test_bump_callback_is_set(self):
-        """Bump callback can be set without error."""
+    def test_car_bump_callback_is_set(self):
+        """Car bump callback can be set without error."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         callback_called = []
 
-        def on_bump(bumper_id, victim_id, is_demo):
-            callback_called.append((bumper_id, victim_id, is_demo))
+        def on_bump(arena, bumper, victim, is_demo, data):
+            callback_called.append((bumper.id, victim.id, is_demo, data))
 
-        arena.set_bump_callback(on_bump)
+        prev = arena.set_car_bump_callback(on_bump, None)
+        assert prev == (None, None)  # No previous callback
 
-    def test_demo_callback_is_set(self):
-        """Demo callback can be set without error."""
+    def test_callback_returns_previous(self):
+        """Setting a callback returns the previous callback and data."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
-        callback_called = []
 
-        def on_demo(bumper_id, victim_id):
-            callback_called.append((bumper_id, victim_id))
+        def cb1(arena, scoring_team, data):
+            pass
 
-        arena.set_demo_callback(on_demo)
+        def cb2(arena, scoring_team, data):
+            pass
+
+        prev1 = arena.set_goal_score_callback(cb1, "data1")
+        prev2 = arena.set_goal_score_callback(cb2, "data2")
+
+        assert prev1 == (None, None)
+        assert prev2[0] is cb1
+        assert prev2[1] == "data1"
 
 
 class TestCarStats:
@@ -264,9 +272,11 @@ class TestArenaClone:
         """Clone without copy_callbacks should not copy Python callbacks."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         callback_results = []
-        arena.set_goal_callback(
-            lambda team: callback_results.append(("original", team))
-        )
+
+        def on_goal(arena, scoring_team, data):
+            callback_results.append(("original", scoring_team))
+
+        arena.set_goal_score_callback(on_goal, None)
 
         # Clone without copying callbacks (default)
         cloned = arena.clone()
@@ -279,7 +289,11 @@ class TestArenaClone:
         """Clone with copy_callbacks=True should work."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         callback_results = []
-        arena.set_goal_callback(lambda team: callback_results.append(team))
+
+        def on_goal(arena, scoring_team, data):
+            callback_results.append(scoring_team)
+
+        arena.set_goal_score_callback(on_goal, None)
 
         # Clone with copying callbacks
         cloned = arena.clone(copy_callbacks=True)
@@ -361,3 +375,52 @@ class TestPerformance:
             arena.step(1)
             state = arena.get_gym_state()
             assert state["tick_count"] == i + 1
+
+
+class TestDemoCallbacks:
+    """Test demo callback edge cases."""
+
+    def test_no_duplicate_demo_callbacks(self):
+        """Demo callback should only fire once per demo event.
+
+        Ensures the callback isn't called multiple times for the same demo.
+        """
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        orange = arena.add_car(rs.Team.ORANGE, rs.CarConfig(rs.CarConfig.BREAKOUT))
+        blue = arena.add_car(rs.Team.BLUE, rs.CarConfig(rs.CarConfig.HYBRID))
+
+        # Set up orange car at origin
+        orange_state = rs.CarState()
+        orange_state.pos = rs.Vec(0, 0, 17)
+        orange.set_state(orange_state)
+
+        # Set up blue car coming in fast with boost
+        blue_state = rs.CarState()
+        blue_state.pos = rs.Vec(-300, 0, 17)
+        blue_state.vel = rs.Vec(2300, 0, 0)
+        blue_state.boost = 100
+        blue.set_state(blue_state)
+
+        # Blue car boosting forward
+        controls = rs.CarControls()
+        controls.throttle = 1
+        controls.boost = True
+        blue.set_controls(controls)
+
+        # Track demos - ensure no duplicates
+        demos = set()
+
+        def handle_demo(arena, bumper, victim, is_demo, data):
+            if not is_demo:
+                return
+            key = (arena.tick_count, bumper.id, victim.id)
+            assert key not in demos, f"Duplicate demo callback: {key}"
+            demos.add(key)
+
+        arena.set_car_bump_callback(handle_demo, None)
+        arena.step(15)
+
+        # Should have exactly one demo
+        assert len(demos) == 1
+        # Demo should happen around tick 9 (blue car id=2 demos orange car id=1)
+        assert (9, blue.id, orange.id) in demos
