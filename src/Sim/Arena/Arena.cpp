@@ -110,6 +110,14 @@ void Arena::SetCarBumpCallback(CarBumpEventFn callbackFunc, void* userInfo) {
 	_carBumpCallback.userInfo = userInfo;
 }
 
+void Arena::SetBoostPickupCallback(BoostPickupEventFn callbackFunc, void* userInfo) {
+	if (gameMode == GameMode::THE_VOID)
+		RS_ERR_CLOSE("Cannot set a boost pickup callback when on THE_VOID gamemode");
+
+	_boostPickupCallback.func = callbackFunc;
+	_boostPickupCallback.userInfo = userInfo;
+}
+
 void Arena::SetProfilerCallback(ProfilerPhaseCallback callbackFunc, void* userInfo, bool enableSubphase) {
 	_profilerCallback.func = callbackFunc;
 	_profilerCallback.userInfo = userInfo;
@@ -768,8 +776,14 @@ void Arena::Step(int ticksToSimulate) {
 		// Profiling: Boost Pad PostTickUpdate
 		if (hasArenaStuff && !ballOnly) {
 			if (_profilerCallback.func) _profilerCallback.func("BoostPadPostTickUpdate", true, _profilerCallback.userInfo);
-			for (BoostPad* pad : _boostPads)
-				pad->_PostTickUpdate(tickTime, _mutatorConfig);
+			for (BoostPad* pad : _boostPads) {
+				if (pad->_PostTickUpdate(tickTime, _mutatorConfig)) {
+					// Boost was picked up - call callback if set
+					if (_boostPickupCallback.func && pad->_internalState.curLockedCar) {
+						_boostPickupCallback.func(this, pad->_internalState.curLockedCar, pad, _boostPickupCallback.userInfo);
+					}
+				}
+			}
 			if (_profilerCallback.func) _profilerCallback.func("BoostPadPostTickUpdate", false, _profilerCallback.userInfo);
 		}
 

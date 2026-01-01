@@ -85,9 +85,10 @@ void BoostPad::_CheckCollide(Car* car) {
 		_internalState.curLockedCar = car;
 }
 
-void BoostPad::_PostTickUpdate(float tickTime, const MutatorConfig& mutatorConfig) {
+bool BoostPad::_PostTickUpdate(float tickTime, const MutatorConfig& mutatorConfig) {
 	using namespace RLConst::BoostPads;
 
+	bool pickedUp = false;
 	uint32_t lockedCarID = 0;
 	if (_internalState.curLockedCar) {
 		lockedCarID = _internalState.curLockedCar->id;
@@ -98,10 +99,12 @@ void BoostPad::_PostTickUpdate(float tickTime, const MutatorConfig& mutatorConfi
 
 			_internalState.isActive = false;
 			_internalState.cooldown = config.isBig ? mutatorConfig.boostPadCooldown_Big : mutatorConfig.boostPadCooldown_Small;
+			pickedUp = true;
 		}
 	}
 
 	_internalState.prevLockedCarID = lockedCarID;
+	return pickedUp;
 }
 
 RS_NS_END

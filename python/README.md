@@ -94,7 +94,15 @@ def on_bump(arena, bumper, victim, is_demo, data):
         print(f"Car {bumper.id} bumped {victim.id}")
 
 prev = arena.set_car_bump_callback(on_bump, my_data)
+
+# Boost pickup callback - called with keyword arguments
+def on_boost_pickup(arena, car, boost_pad, data):
+    print(f"Car {car.id} picked up boost!")
+
+prev = arena.set_boost_pickup_callback(on_boost_pickup, my_data)
 ```
+
+**Note:** Goal and boost pickup callbacks are not available in `THE_VOID` game mode.
 
 ## API Reference
 
@@ -103,7 +111,9 @@ prev = arena.set_car_bump_callback(on_bump, my_data)
 ```python
 rs.init(path)                    # Initialize with collision meshes
 rs.Arena(game_mode, tick_rate)   # Create simulation arena
-rs.GameMode.SOCCAR / .HOOPS / .HEATSEEKER / .SNOWDAY / .DROPSHOT
+# tick_rate: 15-120 (default: 120)
+
+rs.GameMode.SOCCAR / .HOOPS / .HEATSEEKER / .SNOWDAY / .DROPSHOT / .THE_VOID
 rs.Team.BLUE / .ORANGE
 ```
 
@@ -167,15 +177,43 @@ controls.pitch, .yaw, .roll      # float [-1, 1]
 controls.boost, .jump, .handbrake  # bool
 ```
 
-### Vec / RotMat
+### Vec / RotMat / Angle
 
 ```python
 vec = rs.Vec(x, y, z)
 vec.as_numpy()                   # np.array([x, y, z])
+vec == other                     # Rich comparison support
+vec < other                      # Tuple-style ordering
+hash(vec)                        # Hashable (can use in sets/dicts)
 
 rot = rs.RotMat()
+rot = rs.RotMat(forward=rs.Vec(1, 0, 0))  # kwargs constructor
 rot.forward, .right, .up         # Vec
 rot.as_numpy()                   # np.array((3, 3))
+
+angle = rs.Angle(yaw=1.0, pitch=0.5)  # kwargs constructor
+angle.yaw, .pitch, .roll         # float
+```
+
+### Classes with kwargs constructors
+
+All state classes support kwargs for convenient initialization:
+
+```python
+# CarState with kwargs
+state = rs.CarState(pos=rs.Vec(0, 0, 17), boost=100, is_on_ground=True)
+
+# BallState with kwargs
+ball_state = rs.BallState(pos=rs.Vec(0, 0, 100), vel=rs.Vec(1000, 0, 0))
+
+# CarControls with kwargs
+controls = rs.CarControls(throttle=1.0, boost=True, jump=False)
+
+# Angle with kwargs
+angle = rs.Angle(yaw=1.57)
+
+# RotMat with kwargs
+rot = rs.RotMat(forward=rs.Vec(1, 0, 0))
 ```
 
 ### Car Configs

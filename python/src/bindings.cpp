@@ -3,6 +3,8 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/function.h>
 #include <nanobind/stl/unordered_map.h>
+#include <nanobind/stl/optional.h>
+#include <nanobind/stl/tuple.h>
 #include <nanobind/ndarray.h>
 
 #include "RocketSim.h"
@@ -85,40 +87,47 @@ struct ArenaWrapper {
     nb::object goal_score_data;
     nb::object car_bump_callback;
     nb::object car_bump_data;
+    nb::object boost_pickup_callback;
+    nb::object boost_pickup_data;
     
     // Reusable gym state buffer
     GymState gym_state;
     
-    // Track last boost state for pickup detection
-    std::vector<float> last_car_boost;
-    
     ArenaWrapper(GameMode mode, float tick_rate) 
-        : arena(Arena::Create(mode, ArenaConfig{}, tick_rate), [](Arena* a) { delete a; }) 
+        : arena(nullptr, [](Arena* a) { if (a) delete a; })
     {
+        // Validate tick rate (RL uses 120, but allow reasonable range)
+        if (tick_rate < 15.0f || tick_rate > 120.0f) {
+            throw std::invalid_argument("tick_rate must be between 15 and 120");
+        }
+        
+        arena.reset(Arena::Create(mode, ArenaConfig{}, tick_rate));
         setup_callbacks();
     }
     
     void setup_callbacks() {
-        // Goal callback
-        arena->SetGoalScoreCallback([](Arena* a, Team team, void* userInfo) {
-            auto* self = static_cast<ArenaWrapper*>(userInfo);
-            if (team == Team::BLUE) {
-                self->blue_score++;
-            } else {
-                self->orange_score++;
-            }
-            // Call Python callback if set - mtheall API: callback(arena, scoring_team, data)
-            if (self->goal_score_callback) {
-                nb::gil_scoped_acquire gil;
-                try {
-                    self->goal_score_callback(
-                        "arena"_a = nb::cast(self, nb::rv_policy::reference),
-                        "scoring_team"_a = team,
-                        "data"_a = self->goal_score_data
-                    );
-                } catch (...) {}
-            }
-        }, this);
+        // Goal callback - only for non-THE_VOID modes
+        if (arena->gameMode != GameMode::THE_VOID) {
+            arena->SetGoalScoreCallback([](Arena* a, Team team, void* userInfo) {
+                auto* self = static_cast<ArenaWrapper*>(userInfo);
+                if (team == Team::BLUE) {
+                    self->blue_score++;
+                } else {
+                    self->orange_score++;
+                }
+                // Call Python callback if set - mtheall API: callback(arena, scoring_team, data)
+                if (self->goal_score_callback) {
+                    nb::gil_scoped_acquire gil;
+                    try {
+                        self->goal_score_callback(
+                            "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                            "scoring_team"_a = team,
+                            "data"_a = self->goal_score_data
+                        );
+                    } catch (...) {}
+                }
+            }, this);
+        }
         
         // Car bump/demo callback - mtheall API: callback(arena, bumper, victim, is_demo, data)
         arena->SetCarBumpCallback([](Arena* a, Car* bumper, Car* victim, bool isDemo, void* userInfo) {
@@ -142,44 +151,46 @@ struct ArenaWrapper {
                 } catch (...) {}
             }
         }, this);
+        
+        // Boost pickup callback - mtheall API: callback(arena, car, boost_pad, data)
+        // Only set for non-THE_VOID modes
+        if (arena->gameMode != GameMode::THE_VOID) {
+            arena->SetBoostPickupCallback([](Arena* a, Car* car, BoostPad* pad, void* userInfo) {
+                auto* self = static_cast<ArenaWrapper*>(userInfo);
+                
+                // Track boost pickups
+                self->car_stats[car->id].boost_pickups++;
+                
+                // Call Python callback if set
+                if (self->boost_pickup_callback) {
+                    nb::gil_scoped_acquire gil;
+                    try {
+                        self->boost_pickup_callback(
+                            "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                            "car"_a = nb::cast(car, nb::rv_policy::reference),
+                            "boost_pad"_a = nb::cast(pad, nb::rv_policy::reference),
+                            "data"_a = self->boost_pickup_data
+                        );
+                    } catch (...) {}
+                }
+            }, this);
+        }
     }
     
     Car* add_car(Team team, const CarConfig& config) {
         Car* car = arena->AddCar(team, config);
         car_stats[car->id] = CarStats{};
-        last_car_boost.resize(arena->GetCars().size(), 0.0f);
         return car;
     }
     
     void remove_car(Car* car) {
         car_stats.erase(car->id);
         arena->RemoveCar(car);
-        last_car_boost.resize(arena->GetCars().size(), 0.0f);
     }
     
     void step(int ticks = 1) {
-        // Track boost before step for pickup detection
-        size_t i = 0;
-        for (Car* car : arena->GetCars()) {
-            if (i < last_car_boost.size()) {
-                last_car_boost[i] = car->GetState().boost;
-            }
-            i++;
-        }
-        
+        // Boost pickups are now tracked via C++ callback
         arena->Step(ticks);
-        
-        // Detect boost pickups (boost increased)
-        i = 0;
-        for (Car* car : arena->GetCars()) {
-            if (i < last_car_boost.size()) {
-                float new_boost = car->GetState().boost;
-                if (new_boost > last_car_boost[i] + 0.1f) { // Threshold to avoid noise
-                    car_stats[car->id].boost_pickups++;
-                }
-            }
-            i++;
-        }
     }
     
     void reset_to_random_kickoff(int seed = -1) {
@@ -209,6 +220,8 @@ struct ArenaWrapper {
             cloned->goal_score_data = goal_score_data;
             cloned->car_bump_callback = car_bump_callback;
             cloned->car_bump_data = car_bump_data;
+            cloned->boost_pickup_callback = boost_pickup_callback;
+            cloned->boost_pickup_data = boost_pickup_data;
         }
         return cloned;
     }
@@ -374,6 +387,29 @@ NB_MODULE(RocketSim, m) {
         .def("__repr__", [](const Vec& v) {
             return "Vec(" + std::to_string(v.x) + ", " + std::to_string(v.y) + ", " + std::to_string(v.z) + ")";
         })
+        // Rich comparison operators
+        .def("__eq__", [](const Vec& a, const Vec& b) {
+            return a.x == b.x && a.y == b.y && a.z == b.z;
+        })
+        .def("__ne__", [](const Vec& a, const Vec& b) {
+            return a.x != b.x || a.y != b.y || a.z != b.z;
+        })
+        .def("__lt__", [](const Vec& a, const Vec& b) {
+            return std::make_tuple(a.x, a.y, a.z) < std::make_tuple(b.x, b.y, b.z);
+        })
+        .def("__le__", [](const Vec& a, const Vec& b) {
+            return std::make_tuple(a.x, a.y, a.z) <= std::make_tuple(b.x, b.y, b.z);
+        })
+        .def("__gt__", [](const Vec& a, const Vec& b) {
+            return std::make_tuple(a.x, a.y, a.z) > std::make_tuple(b.x, b.y, b.z);
+        })
+        .def("__ge__", [](const Vec& a, const Vec& b) {
+            return std::make_tuple(a.x, a.y, a.z) >= std::make_tuple(b.x, b.y, b.z);
+        })
+        .def("__hash__", [](const Vec& v) {
+            // Use tuple hashing for Vec
+            return nb::hash(nb::make_tuple(v.x, v.y, v.z));
+        })
         .def("as_tuple", [](const Vec& v) {
             return nb::make_tuple(v.x, v.y, v.z);
         })
@@ -387,6 +423,15 @@ NB_MODULE(RocketSim, m) {
     nb::class_<RotMat>(m, "RotMat")
         .def(nb::init<>())
         .def(nb::init<Vec, Vec, Vec>(), "forward"_a, "right"_a, "up"_a)
+        .def("__init__", [](RotMat* self, 
+                           std::optional<Vec> forward,
+                           std::optional<Vec> right,
+                           std::optional<Vec> up) {
+            new (self) RotMat();
+            if (forward) self->forward = *forward;
+            if (right) self->right = *right;
+            if (up) self->up = *up;
+        }, "forward"_a = std::nullopt, "right"_a = std::nullopt, "up"_a = std::nullopt)
         .def_rw("forward", &RotMat::forward)
         .def_rw("right", &RotMat::right)
         .def_rw("up", &RotMat::up)
@@ -406,7 +451,17 @@ NB_MODULE(RocketSim, m) {
 
     // ========== Angle class ==========
     nb::class_<Angle>(m, "Angle")
-        .def(nb::init<float, float, float>(), "yaw"_a = 0.0f, "pitch"_a = 0.0f, "roll"_a = 0.0f)
+        .def(nb::init<>())
+        .def(nb::init<float, float, float>(), "yaw"_a, "pitch"_a, "roll"_a)
+        .def("__init__", [](Angle* self,
+                           std::optional<float> yaw,
+                           std::optional<float> pitch,
+                           std::optional<float> roll) {
+            new (self) Angle();
+            if (yaw) self->yaw = *yaw;
+            if (pitch) self->pitch = *pitch;
+            if (roll) self->roll = *roll;
+        }, "yaw"_a = std::nullopt, "pitch"_a = std::nullopt, "roll"_a = std::nullopt)
         .def_rw("yaw", &Angle::yaw)
         .def_rw("pitch", &Angle::pitch)
         .def_rw("roll", &Angle::roll)
@@ -416,6 +471,27 @@ NB_MODULE(RocketSim, m) {
     // ========== CarControls class ==========
     nb::class_<CarControls>(m, "CarControls")
         .def(nb::init<>())
+        .def("__init__", [](CarControls* self,
+                           std::optional<float> throttle,
+                           std::optional<float> steer,
+                           std::optional<float> pitch,
+                           std::optional<float> yaw,
+                           std::optional<float> roll,
+                           std::optional<bool> boost,
+                           std::optional<bool> jump,
+                           std::optional<bool> handbrake) {
+            new (self) CarControls();
+            if (throttle) self->throttle = *throttle;
+            if (steer) self->steer = *steer;
+            if (pitch) self->pitch = *pitch;
+            if (yaw) self->yaw = *yaw;
+            if (roll) self->roll = *roll;
+            if (boost) self->boost = *boost;
+            if (jump) self->jump = *jump;
+            if (handbrake) self->handbrake = *handbrake;
+        }, "throttle"_a = std::nullopt, "steer"_a = std::nullopt, "pitch"_a = std::nullopt,
+           "yaw"_a = std::nullopt, "roll"_a = std::nullopt, "boost"_a = std::nullopt,
+           "jump"_a = std::nullopt, "handbrake"_a = std::nullopt)
         .def_rw("throttle", &CarControls::throttle)
         .def_rw("steer", &CarControls::steer)
         .def_rw("pitch", &CarControls::pitch)
@@ -429,6 +505,17 @@ NB_MODULE(RocketSim, m) {
     // ========== BallState class ==========
     nb::class_<BallState>(m, "BallState")
         .def(nb::init<>())
+        .def("__init__", [](BallState* self,
+                           std::optional<Vec> pos,
+                           std::optional<Vec> vel,
+                           std::optional<Vec> ang_vel,
+                           std::optional<RotMat> rot_mat) {
+            new (self) BallState();
+            if (pos) self->pos = *pos;
+            if (vel) self->vel = *vel;
+            if (ang_vel) self->angVel = *ang_vel;
+            if (rot_mat) self->rotMat = *rot_mat;
+        }, "pos"_a = std::nullopt, "vel"_a = std::nullopt, "ang_vel"_a = std::nullopt, "rot_mat"_a = std::nullopt)
         .def_rw("pos", &BallState::pos)
         .def_rw("vel", &BallState::vel)
         .def_rw("ang_vel", &BallState::angVel)
@@ -481,6 +568,25 @@ NB_MODULE(RocketSim, m) {
     // ========== CarState class ==========
     nb::class_<CarState>(m, "CarState")
         .def(nb::init<>())
+        .def("__init__", [](CarState* self,
+                           std::optional<Vec> pos,
+                           std::optional<Vec> vel,
+                           std::optional<Vec> ang_vel,
+                           std::optional<RotMat> rot_mat,
+                           std::optional<float> boost,
+                           std::optional<bool> is_on_ground,
+                           std::optional<bool> is_demoed) {
+            new (self) CarState();
+            if (pos) self->pos = *pos;
+            if (vel) self->vel = *vel;
+            if (ang_vel) self->angVel = *ang_vel;
+            if (rot_mat) self->rotMat = *rot_mat;
+            if (boost) self->boost = *boost;
+            if (is_on_ground) self->isOnGround = *is_on_ground;
+            if (is_demoed) self->isDemoed = *is_demoed;
+        }, "pos"_a = std::nullopt, "vel"_a = std::nullopt, "ang_vel"_a = std::nullopt,
+           "rot_mat"_a = std::nullopt, "boost"_a = std::nullopt, "is_on_ground"_a = std::nullopt,
+           "is_demoed"_a = std::nullopt)
         .def_rw("pos", &CarState::pos)
         .def_rw("rot_mat", &CarState::rotMat)
         .def_rw("vel", &CarState::vel)
@@ -676,6 +782,9 @@ NB_MODULE(RocketSim, m) {
         }, "car_id"_a)
         // Callbacks - mtheall-compatible API
         .def("set_goal_score_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            if (a->arena->gameMode == GameMode::THE_VOID) {
+                throw std::runtime_error("Cannot set goal score callback in THE_VOID game mode");
+            }
             nb::object prev_cb = a->goal_score_callback ? a->goal_score_callback : nb::none();
             nb::object prev_data = a->goal_score_data ? a->goal_score_data : nb::none();
             a->goal_score_callback = callback;
@@ -691,6 +800,17 @@ NB_MODULE(RocketSim, m) {
             return nb::make_tuple(prev_cb, prev_data);
         }, "callback"_a, "data"_a = nb::none(),
            "Set car bump callback. callback(arena, bumper, victim, is_demo, data) called with kwargs. Returns previous (callback, data).")
+        .def("set_boost_pickup_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            if (a->arena->gameMode == GameMode::THE_VOID) {
+                throw std::runtime_error("Cannot set boost pickup callback in THE_VOID game mode");
+            }
+            nb::object prev_cb = a->boost_pickup_callback ? a->boost_pickup_callback : nb::none();
+            nb::object prev_data = a->boost_pickup_data ? a->boost_pickup_data : nb::none();
+            a->boost_pickup_callback = callback;
+            a->boost_pickup_data = data;
+            return nb::make_tuple(prev_cb, prev_data);
+        }, "callback"_a, "data"_a = nb::none(),
+           "Set boost pickup callback. callback(arena, car, boost_pad, data) called with kwargs. Returns previous (callback, data).")
         // ====== EFFICIENT GYM STATE GETTERS ======
         .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
              "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")

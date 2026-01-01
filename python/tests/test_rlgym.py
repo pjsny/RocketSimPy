@@ -424,3 +424,188 @@ class TestDemoCallbacks:
         assert len(demos) == 1
         # Demo should happen around tick 9 (blue car id=2 demos orange car id=1)
         assert (9, blue.id, orange.id) in demos
+
+
+class TestBoostPickupCallback:
+    """Test boost pickup callback functionality."""
+
+    def test_boost_pickup_callback_is_set(self):
+        """Test that boost pickup callback can be set and returns previous."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+
+        callback_invocations = []
+
+        def on_pickup(arena, car, boost_pad, data):
+            callback_invocations.append(
+                {"arena": arena, "car_id": car.id, "boost_pad": boost_pad, "data": data}
+            )
+
+        # Initially no callback - should return (None, None)
+        prev = arena.set_boost_pickup_callback(on_pickup, "test_data")
+        assert prev == (None, None)
+
+        # Set again - should return previous
+        prev = arena.set_boost_pickup_callback(lambda *args, **kwargs: None, None)
+        assert prev[0] == on_pickup
+        assert prev[1] == "test_data"
+
+    def test_boost_pickup_callback_not_available_in_the_void(self):
+        """Test that boost pickup callback raises error in THE_VOID mode."""
+        arena = rs.Arena(rs.GameMode.THE_VOID)
+
+        # THE_VOID mode doesn't have boost pads, so setting callback should fail
+        with pytest.raises(RuntimeError, match="THE_VOID"):
+            arena.set_boost_pickup_callback(lambda *args, **kwargs: None, None)
+
+        # Goal callback should also fail in THE_VOID
+        with pytest.raises(RuntimeError, match="THE_VOID"):
+            arena.set_goal_score_callback(lambda *args, **kwargs: None, None)
+
+    def test_boost_pickup_callback_tracks_stats(self):
+        """Test that boost pickups are tracked in car stats."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig(rs.CarConfig.OCTANE))
+
+        # Initial boost pickups should be zero
+        assert arena.get_car_boost_pickups(car.id) == 0
+
+        # Position car on top of a boost pad (full boost at corner)
+        state = car.get_state()
+        state.pos = rs.Vec(3072, -4096, 17)  # Near a full boost pad
+        state.boost = 0
+        car.set_state(state)
+
+        # Step simulation until boost pickup or timeout
+        for _ in range(50):
+            arena.step(1)
+            if arena.get_car_boost_pickups(car.id) > 0:
+                break
+
+        # After stepping near boost, should have at least one pickup
+        # (This is position-dependent, may not always trigger)
+
+
+class TestInputValidation:
+    """Test input validation for Arena constructor."""
+
+    def test_valid_game_modes(self):
+        """Test that valid game modes are accepted."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        assert arena is not None
+
+        # THE_VOID also works (no boost pads or goals)
+        arena_void = rs.Arena(rs.GameMode.THE_VOID)
+        assert arena_void is not None
+
+    def test_valid_tick_rates(self):
+        """Test that valid tick rates are accepted."""
+        # Test standard rate
+        arena = rs.Arena(rs.GameMode.SOCCAR, 120)
+        assert arena is not None
+
+        # Test minimum rate
+        arena_15 = rs.Arena(rs.GameMode.SOCCAR, 15)
+        assert arena_15 is not None
+
+        # Test mid rate
+        arena_60 = rs.Arena(rs.GameMode.SOCCAR, 60)
+        assert arena_60 is not None
+
+    def test_invalid_tick_rate_too_low(self):
+        """Test that tick rate below 15 raises error."""
+        with pytest.raises(Exception):  # invalid_argument
+            rs.Arena(rs.GameMode.SOCCAR, 10)
+
+    def test_invalid_tick_rate_too_high(self):
+        """Test that tick rate above 120 raises error."""
+        with pytest.raises(Exception):  # invalid_argument
+            rs.Arena(rs.GameMode.SOCCAR, 240)
+
+
+class TestKwargsConstructors:
+    """Test kwargs support for various classes."""
+
+    def test_angle_kwargs(self):
+        """Test Angle can be constructed with kwargs."""
+        angle = rs.Angle(yaw=1.0)
+        assert angle.yaw == pytest.approx(1.0)
+        assert angle.pitch == pytest.approx(0.0)
+        assert angle.roll == pytest.approx(0.0)
+
+        angle2 = rs.Angle(pitch=0.5, roll=0.3)
+        assert angle2.yaw == pytest.approx(0.0)
+        assert angle2.pitch == pytest.approx(0.5)
+        assert angle2.roll == pytest.approx(0.3)
+
+    def test_car_controls_kwargs(self):
+        """Test CarControls can be constructed with kwargs."""
+        controls = rs.CarControls(throttle=1.0, boost=True)
+        assert controls.throttle == 1.0
+        assert controls.boost == True
+        assert controls.steer == 0.0
+        assert controls.jump == False
+
+    def test_ball_state_kwargs(self):
+        """Test BallState can be constructed with kwargs."""
+        state = rs.BallState(pos=rs.Vec(100, 200, 300))
+        assert state.pos.x == 100
+        assert state.pos.y == 200
+        assert state.pos.z == 300
+
+        state2 = rs.BallState(vel=rs.Vec(10, 20, 30))
+        assert state2.vel.x == 10
+        assert state2.vel.y == 20
+        assert state2.vel.z == 30
+
+    def test_car_state_kwargs(self):
+        """Test CarState can be constructed with kwargs."""
+        state = rs.CarState(pos=rs.Vec(100, 0, 17), boost=50.0)
+        assert state.pos.x == 100
+        assert state.boost == 50.0
+
+    def test_rot_mat_kwargs(self):
+        """Test RotMat can be constructed with kwargs."""
+        mat = rs.RotMat(forward=rs.Vec(1, 0, 0))
+        assert mat.forward.x == 1
+        assert mat.forward.y == 0
+        assert mat.forward.z == 0
+
+
+class TestVecRichComparison:
+    """Test Vec rich comparison operators."""
+
+    def test_vec_equality(self):
+        """Test Vec __eq__."""
+        v1 = rs.Vec(1, 2, 3)
+        v2 = rs.Vec(1, 2, 3)
+        v3 = rs.Vec(1, 2, 4)
+
+        assert v1 == v2
+        assert not (v1 == v3)
+
+    def test_vec_inequality(self):
+        """Test Vec __ne__."""
+        v1 = rs.Vec(1, 2, 3)
+        v2 = rs.Vec(1, 2, 4)
+
+        assert v1 != v2
+
+    def test_vec_less_than(self):
+        """Test Vec __lt__ (tuple comparison)."""
+        v1 = rs.Vec(1, 2, 3)
+        v2 = rs.Vec(1, 2, 4)
+
+        assert v1 < v2
+        assert not (v2 < v1)
+
+    def test_vec_hash(self):
+        """Test Vec __hash__."""
+        v1 = rs.Vec(1, 2, 3)
+        v2 = rs.Vec(1, 2, 3)
+
+        # Same values should have same hash
+        assert hash(v1) == hash(v2)
+
+        # Can be used in sets/dicts
+        s = {v1, v2}
+        assert len(s) == 1

@@ -52,7 +52,8 @@ public:
 	void _CheckCollide(Car* car);
 
 	void _PreTickUpdate(float tickTime);
-	void _PostTickUpdate(float tickTime, const MutatorConfig& mutatorConfig);
+	// Returns true if boost was picked up this tick
+	bool _PostTickUpdate(float tickTime, const MutatorConfig& mutatorConfig);
 private:
 	BoostPad() {}
 };
