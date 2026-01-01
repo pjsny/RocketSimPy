@@ -12,8 +12,15 @@ jobs:
     runs-on: ${{ matrix.os }}
 
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            name: Linux
+          - os: macos-latest
+            name: macOS ARM
+          - os: windows-latest
+            name: Windows
 
     steps:
       - name: Checkout code
@@ -24,18 +31,56 @@ jobs:
         with:
           cmake-version: "3.20"
 
-      - name: Configure CMake
+      - name: Setup MSVC environment (Windows)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: Install Ninja (Windows)
+        if: runner.os == 'Windows'
+        uses: seanmiddleditch/gha-setup-ninja@v3
+
+      - name: Configure CMake (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          New-Item -ItemType Directory -Force -Path build
+          cd build
+          # Remove MinGW from PATH to force MSVC detection
+          $env:Path = ($env:Path -split ';' | Where-Object { $_ -notlike '*mingw*' }) -join ';'
+          cmake .. -G "Ninja" -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_COMPILER=cl -DCMAKE_CXX_COMPILER=cl
+        shell: pwsh
+
+      - name: Configure CMake (Unix)
+        if: runner.os != 'Windows'
         run: |
           mkdir -p build
           cd build
           cmake ..
+        shell: bash
 
-      - name: Build tests
+      - name: Build tests (Windows)
+        if: runner.os == 'Windows'
+        run: |
+          cd build
+          cmake --build . --target RocketSimTests -j4
+        shell: pwsh
+
+      - name: Build tests (Unix)
+        if: runner.os != 'Windows'
         run: |
           cd build
           cmake --build . --target RocketSimTests -j$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
+        shell: bash
 
-      - name: Run tests
+      - name: Run tests (Windows)
+        if: runner.os == 'Windows'
         run: |
           cd build
           ctest --output-on-failure
+        shell: pwsh
+
+      - name: Run tests (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          cd build
+          ctest --output-on-failure
+        shell: bash
