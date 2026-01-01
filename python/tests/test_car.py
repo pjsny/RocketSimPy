@@ -62,6 +62,8 @@ class TestCarState:
         assert hasattr(state, "has_double_jumped")
         assert hasattr(state, "has_flipped")
         assert hasattr(state, "is_supersonic")
+        assert hasattr(state, "has_world_contact")
+        assert hasattr(state, "world_contact_normal")
 
 
 class TestCarControls:

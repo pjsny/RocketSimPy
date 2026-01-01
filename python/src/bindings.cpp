@@ -2,6 +2,7 @@
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/vector.h>
 #include <nanobind/stl/function.h>
+#include <nanobind/stl/unordered_map.h>
 #include <nanobind/ndarray.h>
 
 #include "RocketSim.h"
@@ -13,10 +14,316 @@
 #include "Sim/CarControls.h"
 #include "Sim/MutatorConfig/MutatorConfig.h"
 
+#include <unordered_map>
+#include <memory>
+#include <cstring>
+
 namespace nb = nanobind;
 using namespace nb::literals;
 using namespace RocketSim;
 
+// ============================================================================
+// GymState - Efficient pre-allocated state container for RLGym
+// ============================================================================
+struct GymState {
+    // Ball state: pos(3) + vel(3) + ang_vel(3) = 9 floats
+    // Plus rotation matrix: 9 floats = 18 total
+    static constexpr size_t BALL_STATE_SIZE = 18;
+    
+    // Car state: pos(3) + vel(3) + ang_vel(3) + rot_mat(9) + boost(1) + 
+    // on_ground(1) + has_jumped(1) + has_double_jumped(1) + has_flipped(1) + 
+    // is_demoed(1) + on_wall(1) + supersonic(1) = 25 floats
+    static constexpr size_t CAR_STATE_SIZE = 25;
+    
+    std::vector<float> ball_data;
+    std::vector<float> cars_data;
+    std::vector<float> pads_data;
+    std::vector<float> game_data; // [blue_score, orange_score, tick_count]
+    
+    size_t num_cars = 0;
+    size_t num_pads = 0;
+    
+    void resize(size_t cars, size_t pads) {
+        if (cars != num_cars) {
+            cars_data.resize(cars * CAR_STATE_SIZE);
+            num_cars = cars;
+        }
+        if (pads != num_pads) {
+            pads_data.resize(pads);
+            num_pads = pads;
+        }
+        if (ball_data.size() != BALL_STATE_SIZE) {
+            ball_data.resize(BALL_STATE_SIZE);
+        }
+        if (game_data.size() != 3) {
+            game_data.resize(3);
+        }
+    }
+};
+
+// ============================================================================
+// ArenaWrapper - Wraps Arena with Python callbacks and stat tracking
+// ============================================================================
+struct ArenaWrapper {
+    std::unique_ptr<Arena, void(*)(Arena*)> arena;
+    
+    // Score tracking
+    int blue_score = 0;
+    int orange_score = 0;
+    
+    // Per-car stats (indexed by car ID)
+    struct CarStats {
+        int goals = 0;
+        int demos = 0;
+        int boost_pickups = 0;
+    };
+    std::unordered_map<uint32_t, CarStats> car_stats;
+    
+    // Python callbacks (stored to prevent GC)
+    nb::object goal_callback;
+    nb::object bump_callback;
+    nb::object demo_callback;
+    
+    // Reusable gym state buffer
+    GymState gym_state;
+    
+    // Track last boost state for pickup detection
+    std::vector<float> last_car_boost;
+    
+    ArenaWrapper(GameMode mode, float tick_rate) 
+        : arena(Arena::Create(mode, ArenaConfig{}, tick_rate), [](Arena* a) { delete a; }) 
+    {
+        setup_callbacks();
+    }
+    
+    void setup_callbacks() {
+        // Goal callback
+        arena->SetGoalScoreCallback([](Arena* a, Team team, void* userInfo) {
+            auto* self = static_cast<ArenaWrapper*>(userInfo);
+            if (team == Team::BLUE) {
+                self->blue_score++;
+            } else {
+                self->orange_score++;
+            }
+            // Call Python callback if set
+            if (self->goal_callback) {
+                nb::gil_scoped_acquire gil;
+                try {
+                    self->goal_callback(static_cast<int>(team));
+                } catch (...) {}
+            }
+        }, this);
+        
+        // Car bump/demo callback
+        arena->SetCarBumpCallback([](Arena* a, Car* bumper, Car* victim, bool isDemo, void* userInfo) {
+            auto* self = static_cast<ArenaWrapper*>(userInfo);
+            
+            if (isDemo) {
+                self->car_stats[bumper->id].demos++;
+                // Call demo callback if set
+                if (self->demo_callback) {
+                    nb::gil_scoped_acquire gil;
+                    try {
+                        self->demo_callback(bumper->id, victim->id);
+                    } catch (...) {}
+                }
+            }
+            
+            // Call bump callback if set
+            if (self->bump_callback) {
+                nb::gil_scoped_acquire gil;
+                try {
+                    self->bump_callback(bumper->id, victim->id, isDemo);
+                } catch (...) {}
+            }
+        }, this);
+    }
+    
+    Car* add_car(Team team, const CarConfig& config) {
+        Car* car = arena->AddCar(team, config);
+        car_stats[car->id] = CarStats{};
+        last_car_boost.resize(arena->GetCars().size(), 0.0f);
+        return car;
+    }
+    
+    void remove_car(Car* car) {
+        car_stats.erase(car->id);
+        arena->RemoveCar(car);
+        last_car_boost.resize(arena->GetCars().size(), 0.0f);
+    }
+    
+    void step(int ticks = 1) {
+        // Track boost before step for pickup detection
+        size_t i = 0;
+        for (Car* car : arena->GetCars()) {
+            if (i < last_car_boost.size()) {
+                last_car_boost[i] = car->GetState().boost;
+            }
+            i++;
+        }
+        
+        arena->Step(ticks);
+        
+        // Detect boost pickups (boost increased)
+        i = 0;
+        for (Car* car : arena->GetCars()) {
+            if (i < last_car_boost.size()) {
+                float new_boost = car->GetState().boost;
+                if (new_boost > last_car_boost[i] + 0.1f) { // Threshold to avoid noise
+                    car_stats[car->id].boost_pickups++;
+                }
+            }
+            i++;
+        }
+    }
+    
+    void reset_to_random_kickoff(int seed = -1) {
+        arena->ResetToRandomKickoff(seed);
+        blue_score = 0;
+        orange_score = 0;
+        for (auto& [id, stats] : car_stats) {
+            stats = CarStats{};
+        }
+    }
+    
+    ArenaWrapper* clone() {
+        auto* cloned = new ArenaWrapper(arena->gameMode, arena->GetTickRate());
+        // Copy the arena state
+        delete cloned->arena.release();
+        cloned->arena = std::unique_ptr<Arena, void(*)(Arena*)>(
+            arena->Clone(false), [](Arena* a) { delete a; }
+        );
+        cloned->setup_callbacks();
+        cloned->blue_score = blue_score;
+        cloned->orange_score = orange_score;
+        cloned->car_stats = car_stats;
+        return cloned;
+    }
+    
+    // ========================================================================
+    // Efficient gym state getters - return numpy arrays with minimal overhead
+    // ========================================================================
+    
+    nb::ndarray<nb::numpy, float> get_ball_state() {
+        BallState bs = arena->ball->GetState();
+        float* data = new float[18];
+        
+        // Position
+        data[0] = bs.pos.x; data[1] = bs.pos.y; data[2] = bs.pos.z;
+        // Velocity
+        data[3] = bs.vel.x; data[4] = bs.vel.y; data[5] = bs.vel.z;
+        // Angular velocity
+        data[6] = bs.angVel.x; data[7] = bs.angVel.y; data[8] = bs.angVel.z;
+        // Rotation matrix (flattened row-major)
+        data[9] = bs.rotMat.forward.x; data[10] = bs.rotMat.forward.y; data[11] = bs.rotMat.forward.z;
+        data[12] = bs.rotMat.right.x; data[13] = bs.rotMat.right.y; data[14] = bs.rotMat.right.z;
+        data[15] = bs.rotMat.up.x; data[16] = bs.rotMat.up.y; data[17] = bs.rotMat.up.z;
+        
+        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+        return nb::ndarray<nb::numpy, float>(data, {18}, owner);
+    }
+    
+    nb::ndarray<nb::numpy, float> get_car_state(Car* car) {
+        CarState cs = car->GetState();
+        float* data = new float[25];
+        
+        // Position
+        data[0] = cs.pos.x; data[1] = cs.pos.y; data[2] = cs.pos.z;
+        // Velocity
+        data[3] = cs.vel.x; data[4] = cs.vel.y; data[5] = cs.vel.z;
+        // Angular velocity
+        data[6] = cs.angVel.x; data[7] = cs.angVel.y; data[8] = cs.angVel.z;
+        // Rotation matrix
+        data[9] = cs.rotMat.forward.x; data[10] = cs.rotMat.forward.y; data[11] = cs.rotMat.forward.z;
+        data[12] = cs.rotMat.right.x; data[13] = cs.rotMat.right.y; data[14] = cs.rotMat.right.z;
+        data[15] = cs.rotMat.up.x; data[16] = cs.rotMat.up.y; data[17] = cs.rotMat.up.z;
+        // State flags
+        data[18] = cs.boost;
+        data[19] = cs.isOnGround ? 1.0f : 0.0f;
+        data[20] = cs.hasJumped ? 1.0f : 0.0f;
+        data[21] = cs.hasDoubleJumped ? 1.0f : 0.0f;
+        data[22] = cs.hasFlipped ? 1.0f : 0.0f;
+        data[23] = cs.isDemoed ? 1.0f : 0.0f;
+        data[24] = cs.isSupersonic ? 1.0f : 0.0f;
+        
+        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+        return nb::ndarray<nb::numpy, float>(data, {25}, owner);
+    }
+    
+    nb::ndarray<nb::numpy, float> get_cars_state() {
+        const auto& cars = arena->GetCars();
+        size_t n = cars.size();
+        float* data = new float[n * 25];
+        
+        size_t i = 0;
+        for (Car* car : cars) {
+            CarState cs = car->GetState();
+            float* row = data + i * 25;
+            
+            row[0] = cs.pos.x; row[1] = cs.pos.y; row[2] = cs.pos.z;
+            row[3] = cs.vel.x; row[4] = cs.vel.y; row[5] = cs.vel.z;
+            row[6] = cs.angVel.x; row[7] = cs.angVel.y; row[8] = cs.angVel.z;
+            row[9] = cs.rotMat.forward.x; row[10] = cs.rotMat.forward.y; row[11] = cs.rotMat.forward.z;
+            row[12] = cs.rotMat.right.x; row[13] = cs.rotMat.right.y; row[14] = cs.rotMat.right.z;
+            row[15] = cs.rotMat.up.x; row[16] = cs.rotMat.up.y; row[17] = cs.rotMat.up.z;
+            row[18] = cs.boost;
+            row[19] = cs.isOnGround ? 1.0f : 0.0f;
+            row[20] = cs.hasJumped ? 1.0f : 0.0f;
+            row[21] = cs.hasDoubleJumped ? 1.0f : 0.0f;
+            row[22] = cs.hasFlipped ? 1.0f : 0.0f;
+            row[23] = cs.isDemoed ? 1.0f : 0.0f;
+            row[24] = cs.isSupersonic ? 1.0f : 0.0f;
+            i++;
+        }
+        
+        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+        return nb::ndarray<nb::numpy, float>(data, {n, 25}, owner);
+    }
+    
+    nb::ndarray<nb::numpy, float> get_pads_state() {
+        const auto& pads = arena->GetBoostPads();
+        size_t n = pads.size();
+        float* data = new float[n];
+        
+        for (size_t i = 0; i < n; i++) {
+            data[i] = pads[i]->GetState().isActive ? 1.0f : 0.0f;
+        }
+        
+        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+        return nb::ndarray<nb::numpy, float>(data, {n}, owner);
+    }
+    
+    // Full gym state in one call - most efficient for RLGym
+    nb::dict get_gym_state() {
+        nb::dict result;
+        result["ball"] = get_ball_state();
+        result["cars"] = get_cars_state();
+        result["pads"] = get_pads_state();
+        result["blue_score"] = blue_score;
+        result["orange_score"] = orange_score;
+        result["tick_count"] = arena->tickCount;
+        
+        // Car IDs in same order as cars array
+        nb::list car_ids;
+        for (Car* car : arena->GetCars()) {
+            car_ids.append(car->id);
+        }
+        result["car_ids"] = car_ids;
+        
+        // Car teams in same order
+        nb::list car_teams;
+        for (Car* car : arena->GetCars()) {
+            car_teams.append(static_cast<int>(car->team));
+        }
+        result["car_teams"] = car_teams;
+        
+        return result;
+    }
+};
+
+// ============================================================================
+// Module definition
+// ============================================================================
 NB_MODULE(RocketSim, m) {
     m.doc() = "RocketSim - A C++ library for simulating Rocket League games at maximum efficiency";
 
@@ -67,15 +374,6 @@ NB_MODULE(RocketSim, m) {
     nb::class_<RotMat>(m, "RotMat")
         .def(nb::init<>())
         .def(nb::init<Vec, Vec, Vec>(), "forward"_a, "right"_a, "up"_a)
-        .def("__init__", [](RotMat* self, nb::ndarray<float, nb::shape<9>> arr) {
-            auto data = arr.data();
-            // Flattened row-major: [f.x, f.y, f.z, r.x, r.y, r.z, u.x, u.y, u.z]
-            new (self) RotMat(
-                Vec(data[0], data[1], data[2]),
-                Vec(data[3], data[4], data[5]),
-                Vec(data[6], data[7], data[8])
-            );
-        })
         .def_rw("forward", &RotMat::forward)
         .def_rw("right", &RotMat::right)
         .def_rw("up", &RotMat::up)
@@ -83,7 +381,6 @@ NB_MODULE(RocketSim, m) {
             return "RotMat(forward=" + std::to_string(m.forward.x) + "," + std::to_string(m.forward.y) + "," + std::to_string(m.forward.z) + ")";
         })
         .def("as_numpy", [](const RotMat& m) {
-            // Return as 3x3 matrix (row-major for numpy compatibility)
             float* data = new float[9]{
                 m.forward.x, m.forward.y, m.forward.z,
                 m.right.x, m.right.y, m.right.z,
@@ -161,12 +458,10 @@ NB_MODULE(RocketSim, m) {
     // ========== CarState class ==========
     nb::class_<CarState>(m, "CarState")
         .def(nb::init<>())
-        // Position and rotation
         .def_rw("pos", &CarState::pos)
         .def_rw("rot_mat", &CarState::rotMat)
         .def_rw("vel", &CarState::vel)
         .def_rw("ang_vel", &CarState::angVel)
-        // Ground contact
         .def_rw("is_on_ground", &CarState::isOnGround)
         .def_prop_rw("wheels_with_contact",
             [](const CarState& s) {
@@ -179,41 +474,37 @@ NB_MODULE(RocketSim, m) {
                     s.wheelsWithContact[i] = nb::cast<bool>(wheels[i]);
                 }
             })
-        // Jump state
         .def_rw("has_jumped", &CarState::hasJumped)
         .def_rw("is_jumping", &CarState::isJumping)
         .def_rw("jump_time", &CarState::jumpTime)
-        // Double jump
         .def_rw("has_double_jumped", &CarState::hasDoubleJumped)
         .def_rw("air_time_since_jump", &CarState::airTimeSinceJump)
-        // Flip state
         .def_rw("has_flipped", &CarState::hasFlipped)
         .def_rw("is_flipping", &CarState::isFlipping)
         .def_rw("flip_time", &CarState::flipTime)
         .def_rw("flip_rel_torque", &CarState::flipRelTorque)
-        // Auto-flip
         .def_rw("is_auto_flipping", &CarState::isAutoFlipping)
         .def_rw("auto_flip_timer", &CarState::autoFlipTimer)
         .def_rw("auto_flip_torque_scale", &CarState::autoFlipTorqueScale)
-        // Boost
         .def_rw("boost", &CarState::boost)
         .def_rw("time_spent_boosting", &CarState::boostingTime)
-        // Supersonic
         .def_rw("is_supersonic", &CarState::isSupersonic)
         .def_rw("supersonic_time", &CarState::supersonicTime)
-        // Handbrake
         .def_rw("handbrake_val", &CarState::handbrakeVal)
-        // Demo
         .def_rw("is_demoed", &CarState::isDemoed)
         .def_rw("demo_respawn_timer", &CarState::demoRespawnTimer)
-        // Car contact
         .def_prop_rw("car_contact_id",
             [](const CarState& s) { return s.carContact.otherCarID; },
             [](CarState& s, uint32_t id) { s.carContact.otherCarID = id; })
         .def_prop_rw("car_contact_cooldown_timer",
             [](const CarState& s) { return s.carContact.cooldownTimer; },
             [](CarState& s, float t) { s.carContact.cooldownTimer = t; })
-        // Last controls
+        .def_prop_rw("has_world_contact",
+            [](const CarState& s) { return s.worldContact.hasContact; },
+            [](CarState& s, bool v) { s.worldContact.hasContact = v; })
+        .def_prop_rw("world_contact_normal",
+            [](const CarState& s) { return s.worldContact.contactNormal; },
+            [](CarState& s, const Vec& v) { s.worldContact.contactNormal = v; })
         .def_rw("last_controls", &CarState::lastControls);
 
     // ========== MutatorConfig class ==========
@@ -269,10 +560,10 @@ NB_MODULE(RocketSim, m) {
         .def("demolish", &Car::Demolish, "respawn_delay"_a = 3.0f)
         .def("respawn", &Car::Respawn, "game_mode"_a, "seed"_a = -1, "boost_amount"_a = 33.33f)
         .def_prop_ro("id", [](const Car& c) { return c.id; })
-        .def_prop_ro("team", [](const Car& c) { return static_cast<int>(c.team); });
+        .def_prop_ro("team", [](const Car& c) { return c.team; });
 
-    // ========== Arena class ==========
-    nb::class_<Arena>(m, "Arena")
+    // ========== Arena class (raw, for advanced use) ==========
+    nb::class_<Arena>(m, "_Arena")
         .def(nb::new_([](GameMode gameMode, float tickRate) {
             return Arena::Create(gameMode, ArenaConfig{}, tickRate);
         }), "game_mode"_a, "tick_rate"_a = 120.0f)
@@ -298,18 +589,88 @@ NB_MODULE(RocketSim, m) {
         .def("reset_to_random_kickoff", &Arena::ResetToRandomKickoff, "seed"_a = -1)
         .def("is_ball_probably_going_in", &Arena::IsBallProbablyGoingIn, 
              "max_time"_a = 2.0f, "extra_margin"_a = 0.0f, "goal_team_out"_a = nullptr)
-        // Ball touch callback - stores Python callable
-        .def("set_ball_touch_callback", [](Arena* a, nb::object callback) {
-            // Note: RocketSim doesn't have a direct ball touch callback
-            // This would need to be implemented via the goal score callback or custom logic
-            // For now, we'll store it but it won't be called automatically
-            // Real implementation would require modifying RocketSim C++ code
-        }, "callback"_a)
+        .def("is_ball_scored", &Arena::IsBallScored)
         .def_prop_ro("ball", [](Arena* a) { return a->ball; }, nb::rv_policy::reference)
         .def_prop_ro("game_mode", [](const Arena& a) { return a.gameMode; })
         .def_prop_ro("tick_count", [](const Arena& a) { return a.tickCount; })
         .def_prop_ro("tick_rate", &Arena::GetTickRate)
         .def_prop_ro("tick_time", [](const Arena& a) { return a.tickTime; });
+
+    // ========== ArenaWrapper class (with RLGym features) ==========
+    nb::class_<ArenaWrapper>(m, "Arena")
+        .def(nb::init<GameMode, float>(), "game_mode"_a, "tick_rate"_a = 120.0f)
+        .def("step", &ArenaWrapper::step, "ticks_to_simulate"_a = 1)
+        .def("clone", &ArenaWrapper::clone, nb::rv_policy::take_ownership)
+        .def("add_car", &ArenaWrapper::add_car, "team"_a, "config"_a, nb::rv_policy::reference)
+        .def("remove_car", &ArenaWrapper::remove_car)
+        .def("get_cars", [](ArenaWrapper* a) {
+            std::vector<Car*> cars;
+            for (auto* car : a->arena->GetCars()) {
+                cars.push_back(car);
+            }
+            return cars;
+        }, nb::rv_policy::reference)
+        .def("get_car_from_id", [](ArenaWrapper* a, uint32_t id) {
+            return a->arena->GetCar(id);
+        }, "car_id"_a, nb::rv_policy::reference)
+        .def("get_boost_pads", [](ArenaWrapper* a) {
+            return a->arena->GetBoostPads();
+        }, nb::rv_policy::reference)
+        .def("set_mutator_config", [](ArenaWrapper* a, const MutatorConfig& cfg) {
+            a->arena->SetMutatorConfig(cfg);
+        })
+        .def("get_mutator_config", [](ArenaWrapper* a) -> const MutatorConfig& {
+            return a->arena->GetMutatorConfig();
+        }, nb::rv_policy::reference)
+        .def("reset_to_random_kickoff", &ArenaWrapper::reset_to_random_kickoff, "seed"_a = -1)
+        .def("is_ball_probably_going_in", [](ArenaWrapper* a, float maxTime, float extraMargin, Team* goalTeamOut) {
+            return a->arena->IsBallProbablyGoingIn(maxTime, extraMargin, goalTeamOut);
+        }, "max_time"_a = 2.0f, "extra_margin"_a = 0.0f, "goal_team_out"_a = nullptr)
+        .def("is_ball_scored", [](ArenaWrapper* a) { return a->arena->IsBallScored(); })
+        // Ball property
+        .def_prop_ro("ball", [](ArenaWrapper* a) { return a->arena->ball; }, nb::rv_policy::reference)
+        // Game state properties
+        .def_prop_ro("game_mode", [](ArenaWrapper* a) { return a->arena->gameMode; })
+        .def_prop_ro("tick_count", [](ArenaWrapper* a) { return a->arena->tickCount; })
+        .def_prop_ro("tick_rate", [](ArenaWrapper* a) { return a->arena->GetTickRate(); })
+        .def_prop_ro("tick_time", [](ArenaWrapper* a) { return a->arena->tickTime; })
+        // Score tracking
+        .def_prop_ro("blue_score", [](ArenaWrapper* a) { return a->blue_score; })
+        .def_prop_ro("orange_score", [](ArenaWrapper* a) { return a->orange_score; })
+        // Car stats
+        .def("get_car_goals", [](ArenaWrapper* a, uint32_t car_id) {
+            auto it = a->car_stats.find(car_id);
+            return it != a->car_stats.end() ? it->second.goals : 0;
+        }, "car_id"_a)
+        .def("get_car_demos", [](ArenaWrapper* a, uint32_t car_id) {
+            auto it = a->car_stats.find(car_id);
+            return it != a->car_stats.end() ? it->second.demos : 0;
+        }, "car_id"_a)
+        .def("get_car_boost_pickups", [](ArenaWrapper* a, uint32_t car_id) {
+            auto it = a->car_stats.find(car_id);
+            return it != a->car_stats.end() ? it->second.boost_pickups : 0;
+        }, "car_id"_a)
+        // Callbacks
+        .def("set_goal_callback", [](ArenaWrapper* a, nb::object callback) {
+            a->goal_callback = callback;
+        }, "callback"_a)
+        .def("set_bump_callback", [](ArenaWrapper* a, nb::object callback) {
+            a->bump_callback = callback;
+        }, "callback"_a)
+        .def("set_demo_callback", [](ArenaWrapper* a, nb::object callback) {
+            a->demo_callback = callback;
+        }, "callback"_a)
+        // ====== EFFICIENT GYM STATE GETTERS ======
+        .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
+             "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")
+        .def("get_car_state_array", &ArenaWrapper::get_car_state, "car"_a,
+             "Get single car state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9), boost, on_ground, jumped, double_jumped, flipped, demoed, supersonic]")
+        .def("get_cars_state_array", &ArenaWrapper::get_cars_state,
+             "Get all cars state as (N, 25) numpy array")
+        .def("get_pads_state_array", &ArenaWrapper::get_pads_state,
+             "Get boost pad states as numpy array of 0/1 values")
+        .def("get_gym_state", &ArenaWrapper::get_gym_state,
+             "Get complete gym state as dict with numpy arrays - most efficient for RLGym");
 
     // ========== Car config presets ==========
     m.attr("CAR_CONFIG_OCTANE") = &CAR_CONFIG_OCTANE;
