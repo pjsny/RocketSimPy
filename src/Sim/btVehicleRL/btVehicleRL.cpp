@@ -127,18 +127,53 @@ float btVehicleRL::rayCast(btWheelInfoRL& wheel) {
 
 	// See: I21
 	btVector3 source = wheel.m_raycastInfo.m_hardPointWS;
-	btVector3 target = source + (wheel.m_raycastInfo.m_wheelDirectionWS * realRayLength);
+	btVector3 rayDir = wheel.m_raycastInfo.m_wheelDirectionWS;
+	btVector3 target = source + (rayDir * realRayLength);
 	wheel.m_raycastInfo.m_contactPointWS = target;
 	wheel.m_raycastInfo.m_groundObject = NULL;
 
 	// See: I22
 	btVehicleRaycaster::btVehicleRaycasterResult rayResults;
+	btCollisionObject* object = nullptr;
 	
-	btAssert(m_vehicleRaycaster);
-	btCollisionObject* object = (btCollisionObject*)m_vehicleRaycaster->castRay(source, target, m_chassisBody, rayResults);
+	// Temporal coherence fast-path: test against last hit plane first
+	// Only use for static objects (arena geometry) since they don't move
+	if (wheel.m_hasLastHit && wheel.m_lastHitObject && wheel.m_lastHitObject->isStaticObject()) {
+		// Ray-plane intersection
+		float denom = wheel.m_lastHitNormal.dot(rayDir);
+		if (denom < -0.001f) {  // Ray pointing toward plane (normal points up, ray points down)
+			btVector3 toPlane = wheel.m_lastHitPoint - source;
+			float t = wheel.m_lastHitNormal.dot(toPlane) / denom;
+			
+			if (t > 0 && t < realRayLength) {
+				btVector3 hitPoint = source + rayDir * t;
+				// Check if hit point is close to last hit (within ~20cm)
+				float distSq = (hitPoint - wheel.m_lastHitPoint).length2();
+				if (distSq < 0.04f) {  // 0.2^2 = 0.04
+					// Use cached result!
+					rayResults.m_hitPointInWorld = hitPoint;
+					rayResults.m_hitNormalInWorld = wheel.m_lastHitNormal;
+					rayResults.m_distFraction = t / realRayLength;
+					object = wheel.m_lastHitObject;
+				}
+			}
+		}
+	}
+	
+	// Fall back to full raycast if fast-path didn't work
+	if (!object) {
+		btAssert(m_vehicleRaycaster);
+		object = (btCollisionObject*)m_vehicleRaycaster->castRay(source, target, m_chassisBody, rayResults);
+	}
 
 	// See: I23
 	if (object) {
+		// Update temporal coherence cache
+		wheel.m_hasLastHit = true;
+		wheel.m_lastHitNormal = rayResults.m_hitNormalInWorld;
+		wheel.m_lastHitPoint = rayResults.m_hitPointInWorld;
+		wheel.m_lastHitObject = object;
+		
 		wheel.m_raycastInfo.m_contactPointWS = rayResults.m_hitPointInWorld;
 		float fraction = rayResults.m_distFraction;
 		depth = realRayLength * rayResults.m_distFraction;
@@ -198,6 +233,10 @@ float btVehicleRL::rayCast(btWheelInfoRL& wheel) {
 		}
 
 	} else {
+		// Invalidate cache on miss
+		wheel.m_hasLastHit = false;
+		wheel.m_lastHitObject = nullptr;
+		
 		wheel.m_raycastInfo.m_suspensionLength = wheel.getSuspensionRestLength() + suspensionTravel;
 		wheel.m_suspensionRelativeVelocity = 0;
 		wheel.m_raycastInfo.m_contactNormalWS = -wheel.m_raycastInfo.m_wheelDirectionWS;

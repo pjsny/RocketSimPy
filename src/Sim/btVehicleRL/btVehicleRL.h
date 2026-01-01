@@ -21,6 +21,12 @@ struct btWheelInfoRL : public btWheelInfo {
 	// Extra force applied when compressed significantly
 	float m_extraPushback = 0;
 
+	// Temporal coherence cache for fast-path raycast
+	bool m_hasLastHit = false;
+	btVector3 m_lastHitNormal;
+	btVector3 m_lastHitPoint;
+	btCollisionObject* m_lastHitObject = nullptr;
+
 	btWheelInfoRL() {}
 
 	btWheelInfoRL(btWheelInfoConstructionInfo& constructionInfo) : btWheelInfo(constructionInfo) {}
