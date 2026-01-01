@@ -134,7 +134,7 @@ public:
 	Arena& operator =(Arena&& other) = delete; // No move operator
 
 	// Get a deep copy of the arena
-	Arena* Clone(bool copyCallbacks);
+	Arena* Clone(bool copyCallbacks = false);
 
 	// NOTE: Car ID will not be restored
 	Car* DeserializeNewCar(DataStreamIn& in, Team team);

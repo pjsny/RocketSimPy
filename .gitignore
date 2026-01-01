@@ -51,3 +51,13 @@ ___*
 
 # MacOS
 .DS_Store
+
+# python
+python/build/
+python/dist/
+python/RocketSim.egg-info/
+python/.scikit-build/
+python/.venv/
+python/.pytest_cache/
+__pycache__/
+*.pyc

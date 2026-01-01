@@ -1,68 +1,63 @@
-![image](https://user-images.githubusercontent.com/36944229/219303954-7267bce1-b7c5-4f15-881c-b9545512e65b.png)
+# RocketSimPy
 
-**A C++ library for simulating Rocket League games at maximum efficiency**
+**A modernized fork of [RocketSim](https://github.com/ZealanL/RocketSim) with official Python bindings**
 
-RocketSim is a complete simulation of Rocket League's gameplay logic and physics that is completely standalone.
-RocketSim supports the game modes: Soccar, Hoops, Heatseeker, and Snowday.
+A C++ library for simulating Rocket League games at maximum efficiency, now with first-class Python support via [nanobind](https://github.com/wjakob/nanobind).
 
-# Speed
-RocketSim is designed to run extremely fast, even when complex collisions and suspension calculations are happening every tick.
-On an average PC running a single thread of RocketSim with two cars, RocketSim can simulate around 20 minutes of game time every second.
-This means that with 12 threads running RocketSim, you can simulate around 10 days of game time every minute!
+## What's Different
 
-# Accuracy
-RocketSim is not a perfectly accurate replication of Rocket League, but is close enough for most applications (such as training ML bots).
-RocketSim is accurate enough to:
-- *Train machine learning bots to SSL level (and probably beyond)*
-- *Simulate different shots on the ball at different angles to find the best input combination*
-- *Simulate air control to find the optimal orientation input*
-- *Simulate pinches*
+This fork builds on ZealanL's original RocketSim and takes inspiration from [mtheall's Python bindings](https://github.com/mtheall/RocketSim):
 
-However, the tiny errors will accumulate over time, so RocketSim is best suited for simulation with consistent feedback.
+- **nanobind bindings** — Faster, cleaner Python bindings (not pybind11)
+- **Full test coverage** — C++ and Python test suites with CI
+- **RLGym compatible** — Drop-in replacement for [rlgym](https://rlgym.org/) environments
+- **Modern build system** — scikit-build-core + uv for Python packaging
+
+## Quick Start
+
+```bash
+# Build and install Python bindings
+cd python
+uv build --wheel
+uv pip install dist/*.whl
+```
+
+```python
+import RocketSim as rs
+
+rs.init("collision_meshes")
+arena = rs.Arena(rs.GameMode.SOCCAR)
+car = arena.add_car(rs.Team.BLUE, rs.CAR_CONFIG_OCTANE)
+arena.step(100)
+```
+
+## Speed
+
+RocketSim simulates ~20 minutes of game time per second on a single thread. With 12 threads, that's ~10 days of game time per minute.
+
+## Accuracy
+
+Accurate enough to train ML bots to SSL level, simulate shots, air control, and pinches. Small errors accumulate over time — best suited for simulation with consistent feedback.
 
 ## Installation
-- Clone this repo and build it
-- Use https://github.com/ZealanL/RLArenaCollisionDumper to dump all of Rocket League's arena collision meshes
-- Move those assets into RocketSim's executing directory
+
+1. Clone this repo
+2. Dump arena collision meshes using [RLArenaCollisionDumper](https://github.com/ZealanL/RLArenaCollisionDumper)
+3. Build: `mkdir build && cd build && cmake .. && make`
+
+For Python bindings, see [python/README.md](python/README.md).
 
 ## Documentation
-Documentation is available at: https://zealanl.github.io/RocketSimDocs/
 
-## Bindings
-If you don't want to work in C++, here are some (unofficial) bindings written in other languages:
-- **Python**: https://github.com/mtheall/RocketSim by `mtheall`
-- **Python**: https://github.com/uservar/pyrocketsim by `uservar`
-- **Rust**: https://github.com/VirxEC/rocketsim-rs by `VirxEC`
+- Original docs: [zealanl.github.io/RocketSimDocs](https://zealanl.github.io/RocketSimDocs/)
+- Python API: [python/README.md](python/README.md)
 
-Official Python bindings are currently in the works.
+## Credits
 
-## Performance Details
-RocketSim already heavily outperforms the speed of Rocket League's physics tick step without optimization.
-
-Version performance comparison:
-```
-OS: Windows 10 (Process Priority = Normal)
-CPU: Intel i5-11400 @ 2.60GHz
-Ram Speed: 3200MZ
-Compiler: MSVC 14.16
-=================================
-Arena: Default (Soccar)
-Cars: 2 on each team (2v2)
-Inputs: Randomly pre-generated, changed every 2-60 ticks for each car
-=================================
-Single-thread performance (calculated using average CPU cycles per tick on the RocketSim thread) (1M ticks simulated):
-v1.0.0 = 30,334tps
-v1.1.0 = 48,191tps
-v1.2.0 = 50,763tps
-v2.0.0 = ~50,000tps
-v2.1.0 = 114,481tps
-```
-
-## Issues & PRs
-Feel free to make issues and pull requests if you encounter any issues!
-
-You can also contact me on Discord if you have questions: `Zealan#5987`
+- [ZealanL/RocketSim](https://github.com/ZealanL/RocketSim) — Original implementation
+- [mtheall/RocketSim](https://github.com/mtheall/RocketSim) — Python bindings inspiration
+- [RLGym](https://rlgym.org/) — Target compatibility
 
 ## Legal Notice
-RocketSim was written to replicate Rocket League's game logic, but does not actually contain any code from the game.
-To Epic Games/Psyonix: If any of you guys have an issue with this, let me know on Discord and we can resolve it.
+
+RocketSim replicates Rocket League's game logic but contains no code from the game.
