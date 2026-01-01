@@ -24,6 +24,7 @@ RS_NS_START
 typedef std::function<void(class Arena* arena, Team scoringTeam, void* userInfo)> GoalScoreEventFn;
 typedef std::function<void(class Arena* arena, Car* bumper, Car* victim, bool isDemo, void* userInfo)> CarBumpEventFn;
 typedef std::function<void(class Arena* arena, Car* car, BoostPad* boostPad, void* userInfo)> BoostPickupEventFn;
+typedef std::function<void(class Arena* arena, Car* car, void* userInfo)> BallTouchEventFn;
 
 // The container for all game simulation
 // Stores cars, the ball, all arena collisions, and manages the overall game state
@@ -113,6 +114,12 @@ public:
 		void* userInfo = NULL;
 	} _boostPickupCallback;
 	void SetBoostPickupCallback(BoostPickupEventFn callbackFn, void* userInfo = NULL);
+
+	struct {
+		BallTouchEventFn func = NULL;
+		void* userInfo = NULL;
+	} _ballTouchCallback;
+	void SetBallTouchCallback(BallTouchEventFn callbackFn, void* userInfo = NULL);
 
 	// Profiling callback - called at the start/end of each phase in Step()
 	// phase_name: name of the phase (e.g., "CarPreTickUpdate", "BulletPhysics", etc.)

@@ -81,7 +81,7 @@ struct ArenaWrapper {
     };
     std::unordered_map<uint32_t, CarStats> car_stats;
     
-    // Python callbacks (stored to prevent GC) - mtheall-compatible API
+    // Python callbacks (stored to prevent GC)
     // Each callback stores (callback, data) tuple
     nb::object goal_score_callback;
     nb::object goal_score_data;
@@ -89,6 +89,8 @@ struct ArenaWrapper {
     nb::object car_bump_data;
     nb::object boost_pickup_callback;
     nb::object boost_pickup_data;
+    nb::object ball_touch_callback;
+    nb::object ball_touch_data;
     
     // Reusable gym state buffer
     GymState gym_state;
@@ -115,7 +117,7 @@ struct ArenaWrapper {
                 } else {
                     self->orange_score++;
                 }
-                // Call Python callback if set - mtheall API: callback(arena, scoring_team, data)
+                // Call Python callback if set
                 if (self->goal_score_callback) {
                     nb::gil_scoped_acquire gil;
                     try {
@@ -129,7 +131,7 @@ struct ArenaWrapper {
             }, this);
         }
         
-        // Car bump/demo callback - mtheall API: callback(arena, bumper, victim, is_demo, data)
+        // Car bump/demo callback
         arena->SetCarBumpCallback([](Arena* a, Car* bumper, Car* victim, bool isDemo, void* userInfo) {
             auto* self = static_cast<ArenaWrapper*>(userInfo);
             
@@ -152,7 +154,7 @@ struct ArenaWrapper {
             }
         }, this);
         
-        // Boost pickup callback - mtheall API: callback(arena, car, boost_pad, data)
+        // Boost pickup callback
         // Only set for non-THE_VOID modes
         if (arena->gameMode != GameMode::THE_VOID) {
             arena->SetBoostPickupCallback([](Arena* a, Car* car, BoostPad* pad, void* userInfo) {
@@ -222,6 +224,24 @@ struct ArenaWrapper {
             cloned->car_bump_data = car_bump_data;
             cloned->boost_pickup_callback = boost_pickup_callback;
             cloned->boost_pickup_data = boost_pickup_data;
+            cloned->ball_touch_callback = ball_touch_callback;
+            cloned->ball_touch_data = ball_touch_data;
+            // Re-setup ball touch callback on clone if it was set
+            if (cloned->ball_touch_callback) {
+                cloned->arena->SetBallTouchCallback([](Arena* a, Car* car, void* userInfo) {
+                    auto* self = static_cast<ArenaWrapper*>(userInfo);
+                    if (self->ball_touch_callback) {
+                        nb::gil_scoped_acquire gil;
+                        try {
+                            self->ball_touch_callback(
+                                "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                                "car"_a = nb::cast(car, nb::rv_policy::reference),
+                                "data"_a = self->ball_touch_data
+                            );
+                        } catch (...) {}
+                    }
+                }, cloned);
+            }
         }
         return cloned;
     }
@@ -709,7 +729,13 @@ NB_MODULE(RocketSim, m) {
             }
             return cars;
         }, nb::rv_policy::reference)
-        .def("get_car_from_id", &Arena::GetCar, "car_id"_a, nb::rv_policy::reference)
+        .def("get_car_from_id", [](Arena* a, uint32_t id, nb::object default_val) -> nb::object {
+            Car* car = a->GetCar(id);
+            if (car) {
+                return nb::cast(car, nb::rv_policy::reference);
+            }
+            return default_val;
+        }, "car_id"_a, "default"_a = nb::none())
         .def("get_boost_pads", [](Arena* a) {
             return a->GetBoostPads();
         }, nb::rv_policy::reference)
@@ -740,9 +766,13 @@ NB_MODULE(RocketSim, m) {
             }
             return cars;
         }, nb::rv_policy::reference)
-        .def("get_car_from_id", [](ArenaWrapper* a, uint32_t id) {
-            return a->arena->GetCar(id);
-        }, "car_id"_a, nb::rv_policy::reference)
+        .def("get_car_from_id", [](ArenaWrapper* a, uint32_t id, nb::object default_val) -> nb::object {
+            Car* car = a->arena->GetCar(id);
+            if (car) {
+                return nb::cast(car, nb::rv_policy::reference);
+            }
+            return default_val;
+        }, "car_id"_a, "default"_a = nb::none())
         .def("get_boost_pads", [](ArenaWrapper* a) {
             return a->arena->GetBoostPads();
         }, nb::rv_policy::reference)
@@ -780,7 +810,7 @@ NB_MODULE(RocketSim, m) {
             auto it = a->car_stats.find(car_id);
             return it != a->car_stats.end() ? it->second.boost_pickups : 0;
         }, "car_id"_a)
-        // Callbacks - mtheall-compatible API
+        // Callbacks
         .def("set_goal_score_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
             if (a->arena->gameMode == GameMode::THE_VOID) {
                 throw std::runtime_error("Cannot set goal score callback in THE_VOID game mode");
@@ -811,6 +841,32 @@ NB_MODULE(RocketSim, m) {
             return nb::make_tuple(prev_cb, prev_data);
         }, "callback"_a, "data"_a = nb::none(),
            "Set boost pickup callback. callback(arena, car, boost_pad, data) called with kwargs. Returns previous (callback, data).")
+        .def("set_ball_touch_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            nb::object prev_cb = a->ball_touch_callback ? a->ball_touch_callback : nb::none();
+            nb::object prev_data = a->ball_touch_data ? a->ball_touch_data : nb::none();
+            a->ball_touch_callback = callback;
+            a->ball_touch_data = data;
+            // Only set C++ callback if Python callback is set (avoid overhead)
+            if (callback && !callback.is_none()) {
+                a->arena->SetBallTouchCallback([](Arena* arena, Car* car, void* userInfo) {
+                    auto* self = static_cast<ArenaWrapper*>(userInfo);
+                    if (self->ball_touch_callback) {
+                        nb::gil_scoped_acquire gil;
+                        try {
+                            self->ball_touch_callback(
+                                "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                                "car"_a = nb::cast(car, nb::rv_policy::reference),
+                                "data"_a = self->ball_touch_data
+                            );
+                        } catch (...) {}
+                    }
+                }, a);
+            } else {
+                a->arena->SetBallTouchCallback(nullptr, nullptr);
+            }
+            return nb::make_tuple(prev_cb, prev_data);
+        }, "callback"_a, "data"_a = nb::none(),
+           "Set ball touch callback. callback(arena, car, data) called with kwargs. Returns previous (callback, data).")
         // ====== EFFICIENT GYM STATE GETTERS ======
         .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
              "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")

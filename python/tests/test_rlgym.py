@@ -27,7 +27,7 @@ class TestScoreTracking:
 
 
 class TestCallbacks:
-    """Test Python callbacks for game events - mtheall-compatible API."""
+    """Test Python callbacks for game events."""
 
     def test_goal_score_callback_is_set(self):
         """Goal score callback can be set without error."""

@@ -76,7 +76,7 @@ pads_state = arena.get_pads_state_array()     # shape (M,)
 # [24]: is_supersonic
 ```
 
-## Callbacks (mtheall-compatible API)
+## Callbacks
 
 ```python
 # Goal scored callback - called with keyword arguments
@@ -100,9 +100,16 @@ def on_boost_pickup(arena, car, boost_pad, data):
     print(f"Car {car.id} picked up boost!")
 
 prev = arena.set_boost_pickup_callback(on_boost_pickup, my_data)
+
+# Ball touch callback - called with keyword arguments
+def on_ball_touch(arena, car, data):
+    print(f"Car {car.id} touched the ball!")
+
+prev = arena.set_ball_touch_callback(on_ball_touch, my_data)
 ```
 
 **Note:** Goal and boost pickup callbacks are not available in `THE_VOID` game mode.
+Ball touch callback is only registered when set (to avoid overhead).
 
 ## API Reference
 
@@ -125,6 +132,7 @@ arena.clone(copy_callbacks=False)  # Deep copy (preserves scores/stats)
 arena.add_car(team, config)      # Add car, returns Car
 arena.remove_car(car)
 arena.get_cars()                 # List of cars
+arena.get_car_from_id(id, default=None)  # Get car by ID or default
 arena.get_boost_pads()           # List of boost pads
 arena.ball                       # Ball object
 arena.tick_count, .tick_rate, .tick_time
