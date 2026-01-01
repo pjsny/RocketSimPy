@@ -16,6 +16,16 @@ if(NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# Enable Link Time Optimization for Release builds
+include(CheckIPOSupported)
+check_ipo_supported(RESULT IPO_SUPPORTED OUTPUT IPO_OUTPUT)
+if(IPO_SUPPORTED AND CMAKE_BUILD_TYPE STREQUAL "Release")
+    set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
+    message(STATUS "LTO enabled")
+else()
+    message(STATUS "LTO not supported: ${IPO_OUTPUT}")
+endif()
+
 # Add all headers and code files
 file(GLOB_RECURSE FILES_ROCKETSIM "${PROJECT_SOURCE_DIR}/src/*.cpp" "${PROJECT_SOURCE_DIR}/src/*.h")
 
@@ -28,6 +38,8 @@ add_library(RocketSim STATIC ${FILES_ROCKETSIM} ${FILES_BULLET})
 if(CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang|AppleClang")
     # Enable useful warnings for our code
     target_compile_options(RocketSim PRIVATE -Wall -Wextra)
+    # Enable native CPU optimizations for maximum performance
+    target_compile_options(RocketSim PRIVATE -march=native -mtune=native)
     # Suppress warnings from Bullet library (third-party code)
     # These warnings are from old C99-style code in Bullet and are harmless
     target_compile_options(RocketSim PRIVATE
