@@ -7,7 +7,50 @@
 
 namespace PhaseProfiler {
 
-void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& result) {
+PhaseProfilerCollector::PhaseProfilerCollector(ProfileResult& result) : result_(result) {
+}
+
+PhaseProfilerCollector::~PhaseProfilerCollector() {
+    // Finalize all active timers
+    for (auto& [phase_name, timer] : active_timers_) {
+        if (timer.IsRunning()) {
+            timer.Stop();
+            double elapsed = timer.GetElapsedSeconds();
+            if (phase_stats_.find(phase_name) != phase_stats_.end()) {
+                phase_stats_[phase_name].AddSample(elapsed);
+            }
+        }
+    }
+    
+    // Store results
+    for (const auto& [phase_name, stats] : phase_stats_) {
+        PhaseTiming& phase = result_.phases[phase_name];
+        phase.phase_name = phase_name;
+        phase.stats = stats;
+        phase.sample_count = stats.Count();
+    }
+}
+
+void PhaseProfilerCollector::OnPhaseStart(const char* phase_name) {
+    std::string name(phase_name);
+    if (active_timers_.find(name) == active_timers_.end()) {
+        active_timers_[name] = ProfilerUtils::Timer();
+        phase_stats_[name] = ProfilerUtils::Statistics();
+    }
+    active_timers_[name].Start();
+}
+
+void PhaseProfilerCollector::OnPhaseEnd(const char* phase_name) {
+    std::string name(phase_name);
+    if (active_timers_.find(name) != active_timers_.end()) {
+        active_timers_[name].Stop();
+        double elapsed = active_timers_[name].GetElapsedSeconds();
+        phase_stats_[name].AddSample(elapsed);
+        active_timers_[name].Reset();
+    }
+}
+
+void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& result, bool enable_subphase) {
     result.ticks_simulated = num_ticks;
     result.tick_rate = arena->GetTickRate();
     
@@ -15,6 +58,23 @@ void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& res
     for (int i = 0; i < 100; i++) {
         arena->Step(1);
     }
+    
+    // Create profiler collector
+    PhaseProfilerCollector collector(result);
+    
+    // Set up profiling callback
+    arena->SetProfilerCallback(
+        [](const char* phase_name, bool is_start, void* userInfo) {
+            PhaseProfilerCollector* collector = static_cast<PhaseProfilerCollector*>(userInfo);
+            if (is_start) {
+                collector->OnPhaseStart(phase_name);
+            } else {
+                collector->OnPhaseEnd(phase_name);
+            }
+        },
+        &collector,
+        enable_subphase  // Enable sub-phase profiling (Car.VehicleFirst, etc.)
+    );
     
     // Profile overall step timing
     ProfilerUtils::Timer timer;
@@ -53,6 +113,9 @@ void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& res
     step_phase.stats = step_stats;
     step_phase.total_time_seconds = result.total_time_seconds;
     step_phase.sample_count = step_stats.Count();
+    
+    // Clear profiler callback
+    arena->SetProfilerCallback(nullptr, nullptr);
 }
 
 ProfileResult RunProfile(
@@ -61,7 +124,8 @@ ProfileResult RunProfile(
     size_t num_cars,
     uint64_t num_ticks,
     float tick_rate,
-    const std::string& config_name
+    const std::string& config_name,
+    bool enable_subphase
 ) {
     ProfileResult result;
     result.config_name = config_name;
@@ -82,7 +146,7 @@ ProfileResult RunProfile(
     }
     
     // Profile
-    ProfileStep(arena, num_ticks, result);
+    ProfileStep(arena, num_ticks, result, enable_subphase);
     
     // Cleanup
     delete arena;
@@ -152,19 +216,49 @@ void PrintProfileResults(const ProfileResult& result) {
         total_mean = result.phases.at("Total Step").GetMeanMicroseconds();
     }
     
-    // Print phases
+    // Separate top-level phases from sub-phases (Car.*)
+    std::vector<std::pair<std::string, const PhaseTiming*>> top_level_phases;
+    std::vector<std::pair<std::string, const PhaseTiming*>> car_sub_phases;
+    
     for (const auto& [phase_name, phase] : result.phases) {
-        double mean_us = phase.GetMeanMicroseconds();
+        if (phase_name == "Total Step") continue;
+        
+        if (phase_name.substr(0, 4) == "Car.") {
+            car_sub_phases.push_back({phase_name, &phase});
+        } else {
+            top_level_phases.push_back({phase_name, &phase});
+        }
+    }
+    
+    // Print top-level phases, with sub-phases nested under CarPreTickUpdate
+    for (const auto& [phase_name, phase] : top_level_phases) {
+        double mean_us = phase->GetMeanMicroseconds();
         double percentage = (total_mean > 0) ? (mean_us / total_mean * 100.0) : 0.0;
         cumulative_time += mean_us;
         double cumul_percentage = (total_mean > 0) ? (cumulative_time / total_mean * 100.0) : 0.0;
         
-        std::cout << std::left << std::setw(35) << phase.phase_name
+        std::cout << std::left << std::setw(35) << phase->phase_name
                   << std::right << std::fixed << std::setprecision(2)
                   << std::setw(12) << mean_us << " μs"
                   << std::setw(12) << std::setprecision(1) << percentage << "%"
                   << std::setw(12) << std::setprecision(1) << cumul_percentage << "%"
                   << "\n";
+        
+        // Print sub-phases after CarPreTickUpdate
+        if (phase_name == "CarPreTickUpdate" && !car_sub_phases.empty()) {
+            double car_pretick_us = mean_us;
+            for (const auto& [sub_name, sub_phase] : car_sub_phases) {
+                double sub_mean_us = sub_phase->GetMeanMicroseconds();
+                double sub_percentage = (car_pretick_us > 0) ? (sub_mean_us / car_pretick_us * 100.0) : 0.0;
+                
+                std::cout << std::left << std::setw(35) << ("  " + sub_phase->phase_name)
+                          << std::right << std::fixed << std::setprecision(2)
+                          << std::setw(12) << sub_mean_us << " μs"
+                          << std::setw(12) << std::setprecision(1) << sub_percentage << "%"
+                          << std::setw(12) << "(sub)"
+                          << "\n";
+            }
+        }
     }
     
     std::cout << std::string(71, '-') << "\n";

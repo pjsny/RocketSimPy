@@ -107,6 +107,17 @@ public:
 	} _carBumpCallback;
 	void SetCarBumpCallback(CarBumpEventFn callbackFn, void* userInfo = NULL);
 
+	// Profiling callback - called at the start/end of each phase in Step()
+	// phase_name: name of the phase (e.g., "CarPreTickUpdate", "BulletPhysics", etc.)
+	// is_start: true for phase start, false for phase end
+	typedef std::function<void(const char* phase_name, bool is_start, void* userInfo)> ProfilerPhaseCallback;
+	struct {
+		ProfilerPhaseCallback func = NULL;
+		void* userInfo = NULL;
+		bool enableSubphase = true;  // Enable sub-phase profiling (e.g., Car.VehicleFirst)
+	} _profilerCallback;
+	void SetProfilerCallback(ProfilerPhaseCallback callbackFn, void* userInfo = NULL, bool enableSubphase = true);
+
 	// NOTE: Arena should be destroyed after use
 	static Arena* Create(GameMode gameMode, const ArenaConfig& arenaConfig = {}, float tickRate = 120);
 	

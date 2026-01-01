@@ -9,6 +9,9 @@
 
 namespace PhaseProfiler {
 
+// Forward declaration
+class PhaseProfilerCollector;
+
 struct PhaseTiming {
     std::string phase_name;
     ProfilerUtils::Statistics stats;
@@ -41,9 +44,23 @@ struct ProfileResult {
     RocketSim::ArenaMemWeightMode mem_weight_mode = RocketSim::ArenaMemWeightMode::HEAVY;
 };
 
-// Profile a single arena step (times the entire step)
-// This is a simplified version since we can't easily instrument Arena internals
-void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& result);
+// Phase profiler that collects timing from Arena profiling hooks
+class PhaseProfilerCollector {
+public:
+    PhaseProfilerCollector(ProfileResult& result);
+    ~PhaseProfilerCollector();
+    
+    void OnPhaseStart(const char* phase_name);
+    void OnPhaseEnd(const char* phase_name);
+    
+private:
+    ProfileResult& result_;
+    std::map<std::string, ProfilerUtils::Timer> active_timers_;
+    std::map<std::string, ProfilerUtils::Statistics> phase_stats_;
+};
+
+// Profile a single arena step (times the entire step and individual phases)
+void ProfileStep(RocketSim::Arena* arena, uint64_t num_ticks, ProfileResult& result, bool enable_subphase = true);
 
 // Run profiling with specific configuration
 ProfileResult RunProfile(
@@ -52,7 +69,8 @@ ProfileResult RunProfile(
     size_t num_cars,
     uint64_t num_ticks,
     float tick_rate = 120.0f,
-    const std::string& config_name = ""
+    const std::string& config_name = "",
+    bool enable_subphase = true
 );
 
 // Compare multiple configurations

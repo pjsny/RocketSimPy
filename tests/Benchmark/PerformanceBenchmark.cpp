@@ -22,6 +22,7 @@ void PrintUsage(const char* program_name) {
     std::cout << "  --compare-configs     Compare different arena configurations\n";
     std::cout << "  --threads N           Number of threads for multi-threaded benchmark (default: 1)\n";
     std::cout << "  --meshes PATH         Path to collision meshes folder (default: collision_meshes)\n";
+    std::cout << "  --no-subphase         Disable sub-phase profiling (reduces overhead)\n";
     std::cout << "  --help                Show this help message\n";
     std::cout << "\n";
     std::cout << "Examples:\n";
@@ -44,6 +45,7 @@ struct BenchmarkArgs {
     size_t num_cars = 2;
     size_t num_threads = 1;
     bool compare_configs = false;
+    bool no_subphase = false;
     std::string collision_meshes_path = "collision_meshes";
 };
 
@@ -67,6 +69,8 @@ BenchmarkArgs ParseArgs(int argc, char* argv[]) {
             args.num_threads = std::stoul(argv[++i]);
         } else if (arg == "--compare-configs") {
             args.compare_configs = true;
+        } else if (arg == "--no-subphase") {
+            args.no_subphase = true;
         } else if (arg == "--meshes" && i + 1 < argc) {
             args.collision_meshes_path = argv[++i];
         } else if (arg == "--help") {
@@ -199,7 +203,8 @@ int main(int argc, char* argv[]) {
                 args.num_cars,
                 args.num_ticks,
                 120.0f,
-                "Default"
+                "Default",
+                !args.no_subphase  // enable sub-phase profiling unless --no-subphase
             );
             
             PhaseProfiler::PrintProfileResults(result);

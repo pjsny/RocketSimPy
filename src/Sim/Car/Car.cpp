@@ -55,7 +55,8 @@ void Car::Respawn(GameMode gameMode, int seed, float boostAmount) {
 	this->SetState(newState);
 }
 
-void Car::_PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig) {
+void Car::_PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig,
+                         ProfilerCallback profilerCallback, void* profilerUserInfo) {
 	using namespace RLConst;
 
 #ifndef RS_MAX_SPEED
@@ -86,8 +87,10 @@ void Car::_PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig&
 	if (_internalState.isDemoed)
 		return; // No other updates need to occur
 
-	// Do first part of the btVehicleRL update (update wheel transforms, do traces, calculate friction impulses) 
+	// Profiling: Vehicle raycast and friction calculation
+	if (profilerCallback) profilerCallback("Car.VehicleFirst", true, profilerUserInfo);
 	_bulletVehicle.updateVehicleFirst(tickTime);
+	if (profilerCallback) profilerCallback("Car.VehicleFirst", false, profilerUserInfo);
 
 	btMatrix3x3 basis = _rigidBody.getWorldTransform().m_basis;
 
@@ -105,6 +108,8 @@ void Car::_PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig&
 		_internalState.isOnGround = numWheelsInContact >= 3;
 	}
 
+	// Profiling: Game logic (wheels, jump, flip, etc.)
+	if (profilerCallback) profilerCallback("Car.GameLogic", true, profilerUserInfo);
 	float forwardSpeed_UU = _bulletVehicle.getForwardSpeed() * BT_TO_UU;
 	_UpdateWheels(tickTime, mutatorConfig, numWheelsInContact, forwardSpeed_UU);
 
@@ -123,11 +128,17 @@ void Car::_PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig&
 		_UpdateAutoRoll(tickTime, mutatorConfig, numWheelsInContact);
 
 	_internalState.worldContact.hasContact = false;
+	if (profilerCallback) profilerCallback("Car.GameLogic", false, profilerUserInfo);
 
-	// Complete the btVehicleRL update (does suspension and applies wheel forces)
+	// Profiling: Vehicle suspension and wheel forces
+	if (profilerCallback) profilerCallback("Car.VehicleSecond", true, profilerUserInfo);
 	_bulletVehicle.updateVehicleSecond(tickTime);
+	if (profilerCallback) profilerCallback("Car.VehicleSecond", false, profilerUserInfo);
 
+	// Profiling: Boost
+	if (profilerCallback) profilerCallback("Car.Boost", true, profilerUserInfo);
 	_UpdateBoost(tickTime, mutatorConfig, forwardSpeed_UU);
+	if (profilerCallback) profilerCallback("Car.Boost", false, profilerUserInfo);
 }
 
 void Car::_PostTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig) {

@@ -110,6 +110,12 @@ void Arena::SetCarBumpCallback(CarBumpEventFn callbackFunc, void* userInfo) {
 	_carBumpCallback.userInfo = userInfo;
 }
 
+void Arena::SetProfilerCallback(ProfilerPhaseCallback callbackFunc, void* userInfo, bool enableSubphase) {
+	_profilerCallback.func = callbackFunc;
+	_profilerCallback.userInfo = userInfo;
+	_profilerCallback.enableSubphase = enableSubphase;
+}
+
 void Arena::ResetToRandomKickoff(int seed) {
 	using namespace RLConst;
 	// TODO: Make shuffling of kickoff setup more efficient (?)
@@ -713,20 +719,36 @@ void Arena::Step(int ticksToSimulate) {
 
 		bool hasArenaStuff = (gameMode != GameMode::THE_VOID);
 		
-		for (Car* car : _cars)
-			car->_PreTickUpdate(gameMode, tickTime, _mutatorConfig);
+		// Profiling: Car PreTickUpdate
+		if (_profilerCallback.func) _profilerCallback.func("CarPreTickUpdate", true, _profilerCallback.userInfo);
+		for (Car* car : _cars) {
+			// Only pass profiler callback for sub-phases if enabled
+			car->_PreTickUpdate(gameMode, tickTime, _mutatorConfig, 
+				_profilerCallback.enableSubphase ? _profilerCallback.func : nullptr, 
+				_profilerCallback.userInfo);
+		}
+		if (_profilerCallback.func) _profilerCallback.func("CarPreTickUpdate", false, _profilerCallback.userInfo);
 
+		// Profiling: Boost Pad PreTickUpdate
 		if (hasArenaStuff && !ballOnly) {
+			if (_profilerCallback.func) _profilerCallback.func("BoostPadPreTickUpdate", true, _profilerCallback.userInfo);
 			for (BoostPad* pad : _boostPads)
 				pad->_PreTickUpdate(tickTime);
+			if (_profilerCallback.func) _profilerCallback.func("BoostPadPreTickUpdate", false, _profilerCallback.userInfo);
 		}
 
-		// Update ball
+		// Profiling: Ball PreTickUpdate
+		if (_profilerCallback.func) _profilerCallback.func("BallPreTickUpdate", true, _profilerCallback.userInfo);
 		ball->_PreTickUpdate(gameMode, tickTime);
+		if (_profilerCallback.func) _profilerCallback.func("BallPreTickUpdate", false, _profilerCallback.userInfo);
 
-		// Update world
+		// Profiling: Bullet Physics
+		if (_profilerCallback.func) _profilerCallback.func("BulletPhysics", true, _profilerCallback.userInfo);
 		_bulletWorld.stepSimulation(tickTime, 0, tickTime);
+		if (_profilerCallback.func) _profilerCallback.func("BulletPhysics", false, _profilerCallback.userInfo);
 
+		// Profiling: Car PostTickUpdate
+		if (_profilerCallback.func) _profilerCallback.func("CarPostTickUpdate", true, _profilerCallback.userInfo);
 		for (Car* car : _cars) {
 			car->_PostTickUpdate(gameMode, tickTime, _mutatorConfig);
 			car->_FinishPhysicsTick(_mutatorConfig);
@@ -741,12 +763,20 @@ void Arena::Step(int ticksToSimulate) {
 				}
 			}
 		}
+		if (_profilerCallback.func) _profilerCallback.func("CarPostTickUpdate", false, _profilerCallback.userInfo);
 
-		if (hasArenaStuff && !ballOnly)
+		// Profiling: Boost Pad PostTickUpdate
+		if (hasArenaStuff && !ballOnly) {
+			if (_profilerCallback.func) _profilerCallback.func("BoostPadPostTickUpdate", true, _profilerCallback.userInfo);
 			for (BoostPad* pad : _boostPads)
 				pad->_PostTickUpdate(tickTime, _mutatorConfig);
+			if (_profilerCallback.func) _profilerCallback.func("BoostPadPostTickUpdate", false, _profilerCallback.userInfo);
+		}
 
+		// Profiling: Ball PostTickUpdate
+		if (_profilerCallback.func) _profilerCallback.func("BallPostTickUpdate", true, _profilerCallback.userInfo);
 		ball->_FinishPhysicsTick(_mutatorConfig);
+		if (_profilerCallback.func) _profilerCallback.func("BallPostTickUpdate", false, _profilerCallback.userInfo);
 
 		// Sync tiles state after the tick ends.
 		// We don't want to sync the state on tile damage, 

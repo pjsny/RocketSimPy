@@ -181,7 +181,11 @@ public:
 		return _internalState.rotMat.up;
 	}
 
-	void _PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig);
+	// Profiler callback type (same as Arena::ProfilerPhaseCallback)
+	typedef std::function<void(const char* phase_name, bool is_start, void* userInfo)> ProfilerCallback;
+	
+	void _PreTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig,
+	                    ProfilerCallback profilerCallback = nullptr, void* profilerUserInfo = nullptr);
 	void _PostTickUpdate(GameMode gameMode, float tickTime, const MutatorConfig& mutatorConfig);
 
 	Vec _velocityImpulseCache = { 0,0,0 };

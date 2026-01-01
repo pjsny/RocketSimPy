@@ -32,9 +32,7 @@ fi
 
 # Parse arguments or use defaults
 MODE="${1:-readme}"
-SEED="${2:-0}"
-TICKS="${3:-1000000}"
-THREADS="${4:-1}"
+DEFAULT_TICKS=1000000
 
 echo -e "${GREEN}Running RocketSim Benchmark...${NC}"
 echo "Mode: $MODE"
@@ -43,6 +41,9 @@ echo ""
 
 case "$MODE" in
     readme|--readme)
+        SEED="${2:-0}"
+        TICKS="${3:-$DEFAULT_TICKS}"
+        THREADS="${4:-1}"
         echo -e "${BLUE}Running README benchmark (4 cars, SOCCAR, ${TICKS} ticks)...${NC}"
         if [ "$THREADS" -gt 1 ]; then
             "$BENCHMARK_EXE" --readme --ticks "$TICKS" --seed "$SEED" --threads "$THREADS" --meshes "$MESHES_PATH"
@@ -52,8 +53,16 @@ case "$MODE" in
         ;;
     profile|--profile)
         CARS="${2:-2}"
-        echo -e "${BLUE}Running phase profiling (${CARS} cars, ${TICKS} ticks)...${NC}"
-        "$BENCHMARK_EXE" --profile --cars "$CARS" --ticks "$TICKS" --meshes "$MESHES_PATH"
+        PROFILE_OPT="${3:-}"
+        TICKS="$DEFAULT_TICKS"
+        # Check if the third arg is 'fast' or a tick count
+        if [ "$PROFILE_OPT" = "--no-subphase" ] || [ "$PROFILE_OPT" = "fast" ]; then
+            echo -e "${BLUE}Running phase profiling (${CARS} cars, ${TICKS} ticks, no sub-phases)...${NC}"
+            "$BENCHMARK_EXE" --profile --cars "$CARS" --ticks "$TICKS" --meshes "$MESHES_PATH" --no-subphase
+        else
+            echo -e "${BLUE}Running phase profiling (${CARS} cars, ${TICKS} ticks)...${NC}"
+            "$BENCHMARK_EXE" --profile --cars "$CARS" --ticks "$TICKS" --meshes "$MESHES_PATH"
+        fi
         ;;
     compare|--compare-configs)
         CARS="${2:-2}"
@@ -70,7 +79,8 @@ case "$MODE" in
         echo ""
         echo "Modes:"
         echo "  readme              README benchmark (default)"
-        echo "  profile [CARS]      Phase profiling (default: 2 cars)"
+        echo "  profile [CARS] [fast]  Phase profiling (default: 2 cars)"
+        echo "                         Add 'fast' to disable sub-phase profiling"
         echo "  compare [CARS]      Compare configurations (default: 2 cars)"
         echo "  multithread [N]     Multi-threaded benchmark (default: 12 threads)"
         echo "  help                Show this help"
@@ -78,7 +88,8 @@ case "$MODE" in
         echo "Examples:"
         echo "  ./benchmark.sh readme"
         echo "  ./benchmark.sh readme 12345 1000000 1"
-        echo "  ./benchmark.sh profile 4"
+        echo "  ./benchmark.sh profile 4              # With sub-phase details (slower)"
+        echo "  ./benchmark.sh profile 8 fast         # Without sub-phases (accurate timing)"
         echo "  ./benchmark.sh compare 2"
         echo "  ./benchmark.sh multithread 12"
         echo ""
