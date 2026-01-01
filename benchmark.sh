@@ -71,6 +71,7 @@ case "$MODE" in
         ;;
     multithread|--multithread)
         THREADS="${2:-12}"
+        TICKS="${3:-$DEFAULT_TICKS}"
         echo -e "${BLUE}Running multi-threaded benchmark (${THREADS} threads, ${TICKS} ticks per thread)...${NC}"
         "$BENCHMARK_EXE" --readme --threads "$THREADS" --ticks "$TICKS" --meshes "$MESHES_PATH"
         ;;
@@ -82,7 +83,7 @@ case "$MODE" in
         echo "  profile [CARS] [fast]  Phase profiling (default: 2 cars)"
         echo "                         Add 'fast' to disable sub-phase profiling"
         echo "  compare [CARS]      Compare configurations (default: 2 cars)"
-        echo "  multithread [N]     Multi-threaded benchmark (default: 12 threads)"
+        echo "  multithread [N] [TICKS]  Multi-threaded benchmark (default: 12 threads, 1M ticks)"
         echo "  help                Show this help"
         echo ""
         echo "Examples:"
