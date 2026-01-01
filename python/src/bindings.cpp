@@ -95,6 +95,9 @@ struct ArenaWrapper {
     // Reusable gym state buffer
     GymState gym_state;
     
+    // Track last gym state tick for ball_touched detection
+    uint64_t last_gym_state_tick = 0;
+    
     ArenaWrapper(GameMode mode, float tick_rate) 
         : arena(nullptr, [](Arena* a) { if (a) delete a; })
     {
@@ -271,7 +274,7 @@ struct ArenaWrapper {
     
     nb::ndarray<nb::numpy, float> get_car_state(Car* car) {
         CarState cs = car->GetState();
-        float* data = new float[25];
+        float* data = new float[26];
         
         // Position
         data[0] = cs.pos.x; data[1] = cs.pos.y; data[2] = cs.pos.z;
@@ -291,20 +294,24 @@ struct ArenaWrapper {
         data[22] = cs.hasFlipped ? 1.0f : 0.0f;
         data[23] = cs.isDemoed ? 1.0f : 0.0f;
         data[24] = cs.isSupersonic ? 1.0f : 0.0f;
+        // Ball touched since last gym state
+        bool ball_touched = cs.ballHitInfo.isValid && 
+                           cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
+        data[25] = ball_touched ? 1.0f : 0.0f;
         
         nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
-        return nb::ndarray<nb::numpy, float>(data, {25}, owner);
+        return nb::ndarray<nb::numpy, float>(data, {26}, owner);
     }
     
     nb::ndarray<nb::numpy, float> get_cars_state() {
         const auto& cars = arena->GetCars();
         size_t n = cars.size();
-        float* data = new float[n * 25];
+        float* data = new float[n * 26];
         
         size_t i = 0;
         for (Car* car : cars) {
             CarState cs = car->GetState();
-            float* row = data + i * 25;
+            float* row = data + i * 26;
             
             row[0] = cs.pos.x; row[1] = cs.pos.y; row[2] = cs.pos.z;
             row[3] = cs.vel.x; row[4] = cs.vel.y; row[5] = cs.vel.z;
@@ -319,11 +326,15 @@ struct ArenaWrapper {
             row[22] = cs.hasFlipped ? 1.0f : 0.0f;
             row[23] = cs.isDemoed ? 1.0f : 0.0f;
             row[24] = cs.isSupersonic ? 1.0f : 0.0f;
+            // Ball touched since last gym state
+            bool ball_touched = cs.ballHitInfo.isValid && 
+                               cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
+            row[25] = ball_touched ? 1.0f : 0.0f;
             i++;
         }
         
         nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
-        return nb::ndarray<nb::numpy, float>(data, {n, 25}, owner);
+        return nb::ndarray<nb::numpy, float>(data, {n, 26}, owner);
     }
     
     nb::ndarray<nb::numpy, float> get_pads_state() {
@@ -362,6 +373,9 @@ struct ArenaWrapper {
             car_teams.append(static_cast<int>(car->team));
         }
         result["car_teams"] = car_teams;
+        
+        // Update last_gym_state_tick for next call's ball_touched detection
+        last_gym_state_tick = arena->tickCount;
         
         return result;
     }
@@ -871,9 +885,9 @@ NB_MODULE(RocketSim, m) {
         .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
              "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")
         .def("get_car_state_array", &ArenaWrapper::get_car_state, "car"_a,
-             "Get single car state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9), boost, on_ground, jumped, double_jumped, flipped, demoed, supersonic]")
+             "Get single car state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9), boost, on_ground, jumped, double_jumped, flipped, demoed, supersonic, ball_touched]")
         .def("get_cars_state_array", &ArenaWrapper::get_cars_state,
-             "Get all cars state as (N, 25) numpy array")
+             "Get all cars state as (N, 26) numpy array")
         .def("get_pads_state_array", &ArenaWrapper::get_pads_state,
              "Get boost pad states as numpy array of 0/1 values")
         .def("get_gym_state", &ArenaWrapper::get_gym_state,

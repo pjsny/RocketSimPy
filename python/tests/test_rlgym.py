@@ -128,18 +128,18 @@ class TestGymStateArrays:
         assert arr[8] == pytest.approx(3, abs=0.1)
 
     def test_car_state_array_shape(self):
-        """Single car state array should have shape (25,)."""
+        """Single car state array should have shape (26,)."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
 
         car_state = arena.get_car_state_array(car)
 
         assert isinstance(car_state, np.ndarray)
-        assert car_state.shape == (25,)
+        assert car_state.shape == (26,)
         assert car_state.dtype == np.float32
 
     def test_cars_state_array_shape(self):
-        """All cars state array should have shape (N, 25)."""
+        """All cars state array should have shape (N, 26)."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         arena.add_car(rs.Team.BLUE, rs.CarConfig())
         arena.add_car(rs.Team.ORANGE, rs.CarConfig())
@@ -148,7 +148,7 @@ class TestGymStateArrays:
         cars_state = arena.get_cars_state_array()
 
         assert isinstance(cars_state, np.ndarray)
-        assert cars_state.shape == (3, 25)
+        assert cars_state.shape == (3, 26)
         assert cars_state.dtype == np.float32
 
     def test_pads_state_array_shape(self):

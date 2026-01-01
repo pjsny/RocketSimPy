@@ -62,7 +62,7 @@ ball_state = arena.get_ball_state_array()     # shape (18,)
 cars_state = arena.get_cars_state_array()     # shape (N, 25)
 pads_state = arena.get_pads_state_array()     # shape (M,)
 
-# Car state array layout (25 floats per car):
+# Car state array layout (26 floats per car):
 # [0-2]: pos (x, y, z)
 # [3-5]: vel (x, y, z)
 # [6-8]: ang_vel (x, y, z)
@@ -74,6 +74,7 @@ pads_state = arena.get_pads_state_array()     # shape (M,)
 # [22]: has_flipped
 # [23]: is_demoed
 # [24]: is_supersonic
+# [25]: ball_touched (since last get_gym_state call)
 ```
 
 ## Callbacks
