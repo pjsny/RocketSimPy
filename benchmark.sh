@@ -20,8 +20,8 @@ MESHES_PATH="$SCRIPT_DIR/collision_meshes"
 
 # Check if benchmark executable exists
 if [ ! -f "$BENCHMARK_EXE" ]; then
-    echo -e "${YELLOW}Benchmark executable not found. Building...${NC}"
-    ./build.sh
+    echo -e "${YELLOW}Benchmark executable not found. Building with --benchmark...${NC}"
+    ./build.sh --benchmark
 fi
 
 # Check if collision meshes exist
