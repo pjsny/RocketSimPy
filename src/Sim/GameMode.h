@@ -14,6 +14,9 @@ enum class GameMode : byte {
 
 	// Soccar but without goals, boost pads, or the arena hull. The cars and ball will fall infinitely.
 	THE_VOID,
+	
+	// Like THE_VOID but with a ground plane for testing purposes
+	THE_VOID_WITH_GROUND,
 };
 
 constexpr const char* GAMEMODE_STRS[] = {
@@ -22,7 +25,8 @@ constexpr const char* GAMEMODE_STRS[] = {
 	"heatseeker",
 	"snowday",
 	"dropshot",
-	"void"
+	"void",
+	"void_with_ground"
 };
 
 RS_NS_END

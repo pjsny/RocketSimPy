@@ -18,6 +18,15 @@ protected:
         car = arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
     }
     
+    void SetUpWithGround() {
+        // Initialize RocketSim (using memory mode to avoid needing collision meshes)
+        std::map<GameMode, std::vector<FileData>> emptyMeshes;
+        InitFromMem(emptyMeshes, true);
+        
+        arena = TestUtils::CreateTestArena(GameMode::THE_VOID_WITH_GROUND, 120.0f);
+        car = arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
+    }
+    
     void TearDown() override {
         delete arena;
     }
@@ -57,26 +66,36 @@ TEST_F(CarPhysicsTest, JumpInitiation) {
 }
 
 TEST_F(CarPhysicsTest, JumpDurationLimits) {
-    // Set car on ground
+    // Use arena with ground for this test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
     CarState initialState = car->GetState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
-    arena->Step(1);
+    
+    // Wait for car to fall and settle on ground (allow more time)
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        CarState checkState = car->GetState();
+        if (checkState.isOnGround) {
+            break;
+        }
+    }
+    
+    CarState state = car->GetState();
+    if (!state.isOnGround) {
+        GTEST_SKIP() << "Car not on ground after settling (pos.z=" << state.pos.z << ")";
+    }
     
     // Start jump
     car->controls.jump = true;
     arena->Step(1);
     
-    CarState state = car->GetState();
-    if (!state.isJumping) {
-        // Car might not be on ground in THE_VOID, skip this test
-        GTEST_SKIP() << "Car not on ground in THE_VOID mode";
-    }
+    state = car->GetState();
+    EXPECT_TRUE(state.isJumping);
     
     // Hold jump for minimum time
     float minTime = RLConst::JUMP_MIN_TIME;
@@ -100,26 +119,39 @@ TEST_F(CarPhysicsTest, JumpDurationLimits) {
 }
 
 TEST_F(CarPhysicsTest, JumpResetOnGround) {
-    // Set car on ground
+    // Use arena with ground for this test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
     CarState initialState = car->GetState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
+    
+    // Wait for car to fall and settle on ground
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        CarState checkState = car->GetState();
+        if (checkState.isOnGround) {
+            break;
+        }
+    }
+    
+    CarState state = car->GetState();
+    if (!state.isOnGround) {
+        GTEST_SKIP() << "Car not on ground after settling";
+    }
+    
+    // Ensure jump button was not pressed previously (for edge detection)
+    car->controls.jump = false;
     arena->Step(1);
     
-    // Jump
+    // Now press jump (edge trigger)
     car->controls.jump = true;
     arena->Step(1);
     
-    CarState state = car->GetState();
-    if (!state.hasJumped) {
-        GTEST_SKIP() << "Jump didn't trigger in THE_VOID mode";
-    }
-    
+    state = car->GetState();
     EXPECT_TRUE(state.hasJumped);
     
     // Simulate until car lands (in THE_VOID, car will fall, but we can test the logic)
@@ -135,20 +167,46 @@ TEST_F(CarPhysicsTest, JumpResetOnGround) {
 }
 
 TEST_F(CarPhysicsTest, DoubleJump) {
-    // Set car on ground initially
+    // Use arena with ground for this test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
     CarState initialState = car->GetState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
+    
+    // Wait for car to fall and settle on ground
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        CarState checkState = car->GetState();
+        if (checkState.isOnGround) {
+            break;
+        }
+    }
+    
+    // Manually ensure ground contact for reliable jump
+    CarState state = car->GetState();
+    state.isOnGround = true;
+    state.wheelsWithContact[0] = true;
+    state.wheelsWithContact[1] = true;
+    state.wheelsWithContact[2] = true;
+    state.wheelsWithContact[3] = true;
+    state.vel.z = 0.0f; // Stop vertical velocity
+    car->SetState(state);
     arena->Step(1);
     
-    // Jump
+    // Ensure jump button was not pressed previously
+    car->controls.jump = false;
+    arena->Step(1);
+    
+    // Jump (edge trigger)
     car->controls.jump = true;
     arena->Step(1);
+    
+    state = car->GetState();
+    EXPECT_TRUE(state.hasJumped);
     
     // Release jump and wait a bit to get airborne
     car->controls.jump = false;
@@ -156,16 +214,12 @@ TEST_F(CarPhysicsTest, DoubleJump) {
         arena->Step(1);
     }
     
-    CarState state = car->GetState();
-    if (!state.hasJumped) {
-        GTEST_SKIP() << "Initial jump didn't trigger in THE_VOID mode";
-    }
-    
+    state = car->GetState();
     EXPECT_TRUE(state.hasJumped);
     EXPECT_FALSE(state.hasDoubleJumped);
     EXPECT_FALSE(state.isOnGround);
     
-    // Double jump (no flip input)
+    // Double jump (no flip input) - edge trigger
     car->controls.jump = true;
     car->controls.yaw = 0.0f;
     car->controls.pitch = 0.0f;
@@ -178,58 +232,109 @@ TEST_F(CarPhysicsTest, DoubleJump) {
 }
 
 TEST_F(CarPhysicsTest, FlipInitiation) {
-    // Set car on ground initially
+    // Use arena with ground for this test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
     CarState initialState = car->GetState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
+    
+    // Wait for car to fall and settle on ground
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        CarState checkState = car->GetState();
+        if (checkState.isOnGround) {
+            break;
+        }
+    }
+    
+    // Manually ensure ground contact for reliable jump
+    CarState state = car->GetState();
+    state.isOnGround = true;
+    state.wheelsWithContact[0] = true;
+    state.wheelsWithContact[1] = true;
+    state.wheelsWithContact[2] = true;
+    state.wheelsWithContact[3] = true;
+    state.vel.z = 0.0f; // Stop vertical velocity
+    car->SetState(state);
     arena->Step(1);
     
-    // Jump first
+    // Ensure jump button was not pressed previously
+    car->controls.jump = false;
+    arena->Step(1);
+    
+    // Jump first (edge trigger)
     car->controls.jump = true;
     arena->Step(1);
     
-    // Release jump
+    state = car->GetState();
+    EXPECT_TRUE(state.hasJumped);
+    EXPECT_TRUE(state.isJumping);
+    
+    // Release jump and wait to get airborne
     car->controls.jump = false;
     for (int i = 0; i < 20; i++) {
         arena->Step(1);
     }
     
-    CarState state = car->GetState();
-    if (!state.hasJumped) {
-        GTEST_SKIP() << "Initial jump didn't trigger in THE_VOID mode";
-    }
-    
+    state = car->GetState();
+    EXPECT_TRUE(state.hasJumped);
     EXPECT_FALSE(state.hasFlipped);
+    EXPECT_FALSE(state.isOnGround); // Should be in the air
     
-    // Flip (with dodge input)
+    // Flip (with dodge input) - edge trigger
     car->controls.jump = true;
     car->controls.pitch = 1.0f; // Forward flip
     arena->Step(1);
     
     state = car->GetState();
     EXPECT_TRUE(state.hasFlipped);
-    EXPECT_TRUE(state.isFlipping);
+    
+    // Step one more time to ensure flipTime increments
+    arena->Step(1);
+    state = car->GetState();
     EXPECT_GT(state.flipTime, 0.0f);
 }
 
 TEST_F(CarPhysicsTest, FlipDodgeDeadzone) {
-    // Set car on ground initially
+    // Use arena with ground for this test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
     CarState initialState = car->GetState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
+    
+    // Wait for car to fall and settle on ground
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        CarState checkState = car->GetState();
+        if (checkState.isOnGround) {
+            break;
+        }
+    }
+    
+    // Manually ensure ground contact for reliable jump
+    CarState state = car->GetState();
+    state.isOnGround = true;
+    state.wheelsWithContact[0] = true;
+    state.wheelsWithContact[1] = true;
+    state.wheelsWithContact[2] = true;
+    state.wheelsWithContact[3] = true;
+    state.vel.z = 0.0f; // Stop vertical velocity
+    car->SetState(state);
     arena->Step(1);
     
-    // Jump first
+    // Ensure jump button was not pressed previously
+    car->controls.jump = false;
+    arena->Step(1);
+    
+    // Jump first (edge trigger)
     car->controls.jump = true;
     arena->Step(1);
     car->controls.jump = false;
@@ -238,12 +343,10 @@ TEST_F(CarPhysicsTest, FlipDodgeDeadzone) {
         arena->Step(1);
     }
     
-    CarState state = car->GetState();
-    if (!state.hasJumped) {
-        GTEST_SKIP() << "Initial jump didn't trigger in THE_VOID mode";
-    }
+    state = car->GetState();
+    EXPECT_TRUE(state.hasJumped);
     
-    // Small input below deadzone should be double jump
+    // Small input below deadzone should be double jump (edge trigger)
     car->controls.jump = true;
     car->controls.pitch = 0.3f; // Below deadzone (0.5)
     car->controls.yaw = 0.0f;
@@ -255,16 +358,41 @@ TEST_F(CarPhysicsTest, FlipDodgeDeadzone) {
     EXPECT_TRUE(state.hasDoubleJumped);
     
     // Reset and try with input above deadzone
-    initialState = CarState();
-    initialState.isOnGround = true;
-    initialState.wheelsWithContact[0] = true;
-    initialState.wheelsWithContact[1] = true;
-    initialState.wheelsWithContact[2] = true;
-    initialState.wheelsWithContact[3] = true;
+    // Create a fresh car for the second test
+    delete arena;
+    SetUpWithGround();
+    
+    // Position car above ground and wait for it to settle
+    initialState = car->GetState();
+    initialState.pos.z = 100.0f; // Above ground
     initialState.vel = Vec(0, 0, 0);
     car->SetState(initialState);
+    
+    // Wait for car to fall and settle on ground
+    for (int i = 0; i < 100; i++) {
+        arena->Step(1);
+        state = car->GetState();
+        if (state.isOnGround) {
+            break;
+        }
+    }
+    
+    // Manually ensure ground contact for reliable jump
+    state = car->GetState();
+    state.isOnGround = true;
+    state.wheelsWithContact[0] = true;
+    state.wheelsWithContact[1] = true;
+    state.wheelsWithContact[2] = true;
+    state.wheelsWithContact[3] = true;
+    state.vel.z = 0.0f; // Stop vertical velocity
+    car->SetState(state);
     arena->Step(1);
     
+    // Ensure jump button was not pressed previously
+    car->controls.jump = false;
+    arena->Step(1);
+    
+    // Jump first (edge trigger)
     car->controls.jump = true;
     arena->Step(1);
     car->controls.jump = false;
@@ -272,6 +400,7 @@ TEST_F(CarPhysicsTest, FlipDodgeDeadzone) {
         arena->Step(1);
     }
     
+    // Flip with input above deadzone (edge trigger)
     car->controls.jump = true;
     car->controls.pitch = 0.6f; // Above deadzone
     arena->Step(1);

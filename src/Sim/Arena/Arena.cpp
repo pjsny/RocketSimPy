@@ -475,7 +475,7 @@ Arena::Arena(GameMode gameMode, const ArenaConfig& config, float tickRate) : _mu
 		solverInfo.m_erp2 = 0.8f;
 	}
 
-	bool loadArenaStuff = gameMode != GameMode::THE_VOID;
+	bool loadArenaStuff = gameMode != GameMode::THE_VOID && gameMode != GameMode::THE_VOID_WITH_GROUND;
 
 	if (loadArenaStuff) {
 		_SetupArenaCollisionShapes();
@@ -486,6 +486,16 @@ Arena::Arena(GameMode gameMode, const ArenaConfig& config, float tickRate) : _mu
 			rb->setFriction(RLConst::ARENA_COLLISION_BASE_FRICTION);
 			rb->setRollingFriction(0.f);
 		}
+	} else if (gameMode == GameMode::THE_VOID_WITH_GROUND) {
+		// Add a simple ground plane for testing purposes
+		// This allows cars to have ground contact for physics tests
+		using namespace RLConst;
+		auto planeShape = new btStaticPlaneShape(btVector3(0, 0, 1), 0);
+		_worldCollisionPlaneShapes.push_back(planeShape);
+		btRigidBody* groundRB = _AddStaticCollisionShape(planeShape, btVector3(0, 0, 0));
+		groundRB->setRestitution(ARENA_COLLISION_BASE_RESTITUTION);
+		groundRB->setFriction(ARENA_COLLISION_BASE_FRICTION);
+		groundRB->setRollingFriction(0.f);
 	}
 
 	{ // Initialize ball
@@ -495,7 +505,7 @@ Arena::Arena(GameMode gameMode, const ArenaConfig& config, float tickRate) : _mu
 		ball->SetState(BallState());
 	}
 
-	if (loadArenaStuff && gameMode != GameMode::DROPSHOT) { // Initialize boost pads
+	if (loadArenaStuff && gameMode != GameMode::DROPSHOT && gameMode != GameMode::THE_VOID_WITH_GROUND) { // Initialize boost pads
 		using namespace RLConst::BoostPads;
 
 		if (_config.useCustomBoostPads) {
