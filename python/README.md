@@ -110,7 +110,7 @@ rs.Team.BLUE / .ORANGE
 
 ```python
 arena.step(ticks)                # Advance simulation
-arena.clone()                    # Deep copy (preserves scores/stats)
+arena.clone(copy_callbacks=False)  # Deep copy (preserves scores/stats)
 arena.add_car(team, config)      # Add car, returns Car
 arena.remove_car(car)
 arena.get_cars()                 # List of cars
@@ -180,9 +180,22 @@ rot.as_numpy()                   # np.array((3, 3))
 ### Car Configs
 
 ```python
-rs.CAR_CONFIG_OCTANE, rs.CAR_CONFIG_DOMINUS
-rs.CAR_CONFIG_PLANK, rs.CAR_CONFIG_BREAKOUT
-rs.CAR_CONFIG_HYBRID, rs.CAR_CONFIG_MERC
+# Create car config from hitbox type (preferred)
+config = rs.CarConfig(rs.CarConfig.OCTANE)  # or rs.CarConfig.DOMINUS, etc.
+
+# Hitbox type constants (also available as CarConfig class attributes)
+rs.CarConfig.OCTANE    # = 0
+rs.CarConfig.DOMINUS   # = 1
+rs.CarConfig.PLANK     # = 2
+rs.CarConfig.BREAKOUT  # = 3
+rs.CarConfig.HYBRID    # = 4
+rs.CarConfig.MERC      # = 5
+
+# Module-level constants (alternative)
+rs.OCTANE, rs.DOMINUS, rs.PLANK, rs.BREAKOUT, rs.HYBRID, rs.MERC
+
+# Full config references (read-only)
+rs.CAR_CONFIG_OCTANE, rs.CAR_CONFIG_DOMINUS, ...
 ```
 
 ## Credits

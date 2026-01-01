@@ -186,17 +186,24 @@ struct ArenaWrapper {
         }
     }
     
-    ArenaWrapper* clone() {
+    ArenaWrapper* clone(bool copy_callbacks = false) {
         auto* cloned = new ArenaWrapper(arena->gameMode, arena->GetTickRate());
         // Copy the arena state
         delete cloned->arena.release();
         cloned->arena = std::unique_ptr<Arena, void(*)(Arena*)>(
-            arena->Clone(false), [](Arena* a) { delete a; }
+            arena->Clone(copy_callbacks), [](Arena* a) { delete a; }
         );
         cloned->setup_callbacks();
         cloned->blue_score = blue_score;
         cloned->orange_score = orange_score;
         cloned->car_stats = car_stats;
+        
+        // Copy Python callbacks if requested
+        if (copy_callbacks) {
+            cloned->goal_callback = goal_callback;
+            cloned->bump_callback = bump_callback;
+            cloned->demo_callback = demo_callback;
+        }
         return cloned;
     }
     
@@ -435,8 +442,9 @@ NB_MODULE(RocketSim, m) {
         .def_rw("connection_point_offset", &WheelPairConfig::connectionPointOffset);
 
     // ========== CarConfig class ==========
-    nb::class_<CarConfig>(m, "CarConfig")
-        .def(nb::init<>())
+    // Use CarConfig(CarConfig.OCTANE) or CarConfig(rs.OCTANE) for presets
+    auto car_config = nb::class_<CarConfig>(m, "CarConfig")
+        .def(nb::init<>())  // Default C++ constructor (empty config)
         .def("__init__", [](CarConfig* self, int hitbox_type) {
             static const CarConfig* configs[] = {
                 &CAR_CONFIG_OCTANE,
@@ -448,12 +456,21 @@ NB_MODULE(RocketSim, m) {
             };
             if (hitbox_type < 0 || hitbox_type > 5) hitbox_type = 0;
             new (self) CarConfig(*configs[hitbox_type]);
-        }, "hitbox_type"_a = 0)
+        }, "hitbox_type"_a)
         .def_rw("hitbox_size", &CarConfig::hitboxSize)
         .def_rw("hitbox_pos_offset", &CarConfig::hitboxPosOffset)
         .def_rw("front_wheels", &CarConfig::frontWheels)
         .def_rw("back_wheels", &CarConfig::backWheels)
         .def_rw("dodge_deadzone", &CarConfig::dodgeDeadzone);
+    
+    // Class-level constants: CarConfig.OCTANE, CarConfig.DOMINUS, etc.
+    car_config.attr("OCTANE") = 0;
+    car_config.attr("DOMINUS") = 1;
+    car_config.attr("PLANK") = 2;
+    car_config.attr("BREAKOUT") = 3;
+    car_config.attr("HYBRID") = 4;
+    car_config.attr("MERC") = 5;
+    
 
     // ========== CarState class ==========
     nb::class_<CarState>(m, "CarState")
@@ -600,7 +617,8 @@ NB_MODULE(RocketSim, m) {
     nb::class_<ArenaWrapper>(m, "Arena")
         .def(nb::init<GameMode, float>(), "game_mode"_a, "tick_rate"_a = 120.0f)
         .def("step", &ArenaWrapper::step, "ticks_to_simulate"_a = 1)
-        .def("clone", &ArenaWrapper::clone, nb::rv_policy::take_ownership)
+        .def("clone", [](ArenaWrapper* a, bool copy_callbacks) { return a->clone(copy_callbacks); },
+             nb::rv_policy::take_ownership, "copy_callbacks"_a = false)
         .def("add_car", &ArenaWrapper::add_car, "team"_a, "config"_a, nb::rv_policy::reference)
         .def("remove_car", &ArenaWrapper::remove_car)
         .def("get_cars", [](ArenaWrapper* a) {
@@ -681,6 +699,7 @@ NB_MODULE(RocketSim, m) {
     m.attr("CAR_CONFIG_MERC") = &CAR_CONFIG_MERC;
 
     // ========== Hitbox type constants ==========
+    // Module-level (backwards compatible)
     m.attr("OCTANE") = 0;
     m.attr("DOMINUS") = 1;
     m.attr("PLANK") = 2;

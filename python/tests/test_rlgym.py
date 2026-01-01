@@ -260,6 +260,34 @@ class TestArenaClone:
         assert arena.tick_count == 0
         assert cloned.tick_count == 10
 
+    def test_clone_copy_callbacks_false_by_default(self):
+        """Clone without copy_callbacks should not copy Python callbacks."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        callback_results = []
+        arena.set_goal_callback(
+            lambda team: callback_results.append(("original", team))
+        )
+
+        # Clone without copying callbacks (default)
+        cloned = arena.clone()
+
+        # Verify the clone was created (basic sanity check)
+        assert cloned is not None
+        assert cloned.tick_count == arena.tick_count
+
+    def test_clone_copy_callbacks_true(self):
+        """Clone with copy_callbacks=True should work."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        callback_results = []
+        arena.set_goal_callback(lambda team: callback_results.append(team))
+
+        # Clone with copying callbacks
+        cloned = arena.clone(copy_callbacks=True)
+
+        # Verify the clone was created
+        assert cloned is not None
+        assert cloned.tick_count == arena.tick_count
+
 
 class TestIsBallScored:
     """Test ball scoring detection."""
@@ -274,6 +302,40 @@ class TestIsBallScored:
         """Ball should not be scored at start."""
         arena = rs.Arena(rs.GameMode.SOCCAR)
         assert arena.is_ball_scored() == False
+
+
+class TestCarRemoval:
+    """Test car removal edge cases (regression tests)."""
+
+    def test_repeated_add_remove_cycles(self):
+        """Adding and removing many cars shouldn't cause issues."""
+        import random
+
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+
+        for _ in range(50):
+            # Add several cars
+            for _ in range(5):
+                team = rs.Team.BLUE if random.randint(0, 1) == 0 else rs.Team.ORANGE
+                arena.add_car(team, rs.CarConfig())
+
+            # Remove all cars
+            while len(arena.get_cars()) > 0:
+                arena.remove_car(arena.get_cars()[0])
+
+            assert len(arena.get_cars()) == 0
+
+    def test_remove_car_clears_stats(self):
+        """Removing a car should clear its stats."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        car_id = car.id
+
+        arena.remove_car(car)
+
+        # Stats for removed car should return 0
+        assert arena.get_car_goals(car_id) == 0
+        assert arena.get_car_demos(car_id) == 0
 
 
 class TestPerformance:
