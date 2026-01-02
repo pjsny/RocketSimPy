@@ -323,6 +323,90 @@ void Ball::_OnHit(
 	}
 }
 
+void Ball::_OnHitDeferred(
+	Car* car, Vec relPos,
+	GameMode gameMode, const MutatorConfig& mutatorConfig, uint64_t tickCount
+) {
+	using namespace RLConst;
+
+	auto carState = car->GetState();
+	auto ballState = GetState();
+
+	auto& ballHitInfo = car->_internalState.ballHitInfo;
+
+	ballHitInfo.isValid = true;
+
+	ballHitInfo.relativePosOnBall = relPos;
+	ballHitInfo.tickCountWhenHit = tickCount;
+
+	ballHitInfo.ballPos = ballState.pos;
+	ballHitInfo.extraHitVel = Vec();
+
+	// Once we do an extra car-ball impulse, we need to wait at least 1 tick to do it again
+	if ((tickCount > ballHitInfo.tickCountWhenExtraImpulseApplied + 1) || (ballHitInfo.tickCountWhenExtraImpulseApplied > tickCount)) {
+		// Apply extra hit impulse
+		ballHitInfo.tickCountWhenExtraImpulseApplied = tickCount;
+		Vec carForward = car->GetForwardDir();
+		Vec relPosFromCar = ballState.pos - carState.pos;
+		Vec relVel = ballState.vel - carState.vel;
+
+		float relSpeed = RS_MIN(relVel.Length(), BALL_CAR_EXTRA_IMPULSE_MAXDELTAVEL_UU);
+
+		if (relSpeed > 0) {
+			bool extraZScale =
+				gameMode == GameMode::HOOPS &&
+				carState.isOnGround &&
+				carState.rotMat.up.z > BALL_CAR_EXTRA_IMPULSE_Z_SCALE_HOOPS_NORMAL_Z_THRESH;
+			float zScale = extraZScale ? BALL_CAR_EXTRA_IMPULSE_Z_SCALE_HOOPS_GROUND : BALL_CAR_EXTRA_IMPULSE_Z_SCALE;
+			Vec hitDir = (relPosFromCar * Vec(1, 1, zScale)).Normalized();
+			Vec forwardDirAdjustment = carForward * hitDir.Dot(carForward) * (1 - BALL_CAR_EXTRA_IMPULSE_FORWARD_SCALE);
+			hitDir = (hitDir - forwardDirAdjustment).Normalized();
+			Vec addedVel = (hitDir * relSpeed) * BALL_CAR_EXTRA_IMPULSE_FACTOR_CURVE.GetOutput(relSpeed) * mutatorConfig.ballHitExtraForceScale;
+			ballHitInfo.extraHitVel = addedVel;
+
+			// Velocity won't be actually added until the end of this tick
+			_velocityImpulseCache += addedVel * UU_TO_BT;
+		}
+	} else {
+		// Don't do multiple extra impulses in a row
+		return;
+	}
+
+	if (gameMode == GameMode::HEATSEEKER) {
+		bool canIncrease = (_internalState.hsInfo.timeSinceHit > Heatseeker::MIN_SPEEDUP_INTERVAL) || (_internalState.hsInfo.yTargetDir == 0);
+		float newTargetDir = (car->team == Team::BLUE) ? 1 : -1;
+		if (canIncrease && (newTargetDir != _internalState.hsInfo.yTargetDir)) {
+			_internalState.hsInfo.timeSinceHit = 0;
+			_internalState.hsInfo.curTargetSpeed = RS_MIN(_internalState.hsInfo.curTargetSpeed + Heatseeker::TARGET_SPEED_INCREMENT, Heatseeker::MAX_SPEED);
+		}
+		_internalState.hsInfo.yTargetDir = newTargetDir;
+	} else if (gameMode == GameMode::DROPSHOT) {
+		auto& accumulatedHitForce = _internalState.dsInfo.accumulatedHitForce;
+		auto& chargeLevel = _internalState.dsInfo.chargeLevel;
+
+		Vec dirFromCar = (ballState.pos - carState.pos).Normalized();
+		Vec relVelFromCar = carState.vel - ballState.vel;
+		float velIntoBall = dirFromCar.Dot(relVelFromCar);
+		if (velIntoBall >= Dropshot::MIN_CHARGE_HIT_SPEED) {
+			
+			accumulatedHitForce += velIntoBall;
+
+			// Normal charge
+			if (accumulatedHitForce >= Dropshot::MIN_ABSORBED_FORCE_FOR_CHARGE)
+				chargeLevel = 2;
+			
+			// Supercharge
+			if (accumulatedHitForce >= Dropshot::MIN_ABSORBED_FORCE_FOR_SUPERCHARGE)
+				chargeLevel = 3;
+		}
+		
+		if (chargeLevel > 1) {
+			float newTargetDir = (car->team == Team::BLUE) ? 1 : -1;
+			_internalState.dsInfo.yTargetDir = newTargetDir;
+		}
+	}
+}
+
 void Ball::_OnWorldCollision(GameMode gameMode, Vec normal, float tickTime) {
 	using namespace RLConst;
 

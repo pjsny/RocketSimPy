@@ -288,35 +288,51 @@ bool Arena::_BulletContactAddedCallback(
 		userIndexA = bodyA->getUserIndex(),
 		userIndexB = bodyB->getUserIndex();
 
-	bool carInvolved = (userIndexA == BT_USERINFO_TYPE_CAR);
-	if (carInvolved) {
-
+	// Get arena instance for recording collisions
+	Arena* arenaInst = nullptr;
+	if (userIndexA == BT_USERINFO_TYPE_CAR) {
 		Car* car = (Car*)bodyA->getUserPointer();
-		Arena* arenaInst = (Arena*)car->_bulletVehicle.m_dynamicsWorld->getWorldUserInfo();
+		arenaInst = (Arena*)car->_bulletVehicle.m_dynamicsWorld->getWorldUserInfo();
+	} else if (userIndexA == BT_USERINFO_TYPE_BALL || userIndexB == -1) {
+		arenaInst = (Arena*)bodyB->getUserPointer();
+	}
 
+	// Record collision for deferred processing (car-ball, car-car, car-world)
+	bool carInvolved = (userIndexA == BT_USERINFO_TYPE_CAR);
+	if (carInvolved && arenaInst) {
+		// Set friction/restitution (must happen during callback for physics)
 		if (userIndexB == BT_USERINFO_TYPE_BALL) {
-			// Car + Ball
-			arenaInst->
-				_BtCallback_OnCarBallCollision(car, (Ball*)bodyB->getUserPointer(), contactPoint, shouldSwap);
+			contactPoint.m_combinedFriction = RLConst::CARBALL_COLLISION_FRICTION;
+			contactPoint.m_combinedRestitution = RLConst::CARBALL_COLLISION_RESTITUTION;
 		} else if (userIndexB == BT_USERINFO_TYPE_CAR) {
-			// Car + Car
-			arenaInst->
-				_BtCallback_OnCarCarCollision(car, (Car*)bodyB->getUserPointer(), contactPoint);
-		} else {
-			// Car + World
-			arenaInst->
-				_BtCallback_OnCarWorldCollision(car, (btCollisionObject*)bodyB->getUserPointer(), contactPoint);
+			contactPoint.m_combinedFriction = RLConst::CARCAR_COLLISION_FRICTION;
+			contactPoint.m_combinedRestitution = RLConst::CARCAR_COLLISION_RESTITUTION;
+		} else if (userIndexB == -1) {
+			// Car-world collision
+			contactPoint.m_combinedFriction = arenaInst->_mutatorConfig.carWorldFriction;
+			contactPoint.m_combinedRestitution = arenaInst->_mutatorConfig.carWorldRestitution;
 		}
+		
+		CollisionRecord record;
+		record.userIndexA = userIndexA;
+		record.userIndexB = userIndexB;
+		record.userPointerA = bodyA->getUserPointer();
+		record.userPointerB = bodyB->getUserPointer();
+		record.localPointA = contactPoint.m_localPointA;
+		record.localPointB = contactPoint.m_localPointB;
+		record.normalWorldOnB = contactPoint.m_normalWorldOnB;
+		record.combinedFriction = contactPoint.m_combinedFriction;
+		record.combinedRestitution = contactPoint.m_combinedRestitution;
+		record.shouldSwap = shouldSwap;
+		arenaInst->_contactTracker.records.push_back(record);
 	} else if (userIndexA == BT_USERINFO_TYPE_BALL && userIndexB == BT_USERINFO_TYPE_DROPSHOT_TILE) {
-
-		Arena* arenaInst = (Arena*)bodyB->getUserPointer();
+		// Dropshot tile collision - process immediately (no car involved)
+		arenaInst = (Arena*)bodyB->getUserPointer();
 		arenaInst->ball->_OnDropshotTileCollision(
 			arenaInst->_dropshotTilesState, bodyB->getUserIndex2(), bodyB, arenaInst->tickCount, arenaInst->tickTime
 		);
-
 	} else if (userIndexA == BT_USERINFO_TYPE_BALL && userIndexB == -1) {
-		// Ball + World
-		Arena* arenaInst = (Arena*)bodyB->getUserPointer();
+		// Ball + World - process immediately
 		arenaInst->ball->_OnWorldCollision(arenaInst->gameMode, contactPoint.m_normalWorldOnB, arenaInst->tickTime);
 		
 		// Set as special (unless in snowday)
@@ -332,11 +348,27 @@ bool Arena::_BulletContactAddedCallback(
 	return true;
 }
 
-void Arena::_BtCallback_OnCarBallCollision(Car* car, Ball* ball, btManifoldPoint& manifoldPoint, bool ballIsBodyA) {
+void Arena::_ProcessCollisionRecord(const CollisionRecord& record) {
+	if (record.userIndexA == BT_USERINFO_TYPE_CAR) {
+		Car* car = (Car*)record.userPointerA;
+		
+		if (record.userIndexB == BT_USERINFO_TYPE_BALL) {
+			_OnCarBallCollision(car, (Ball*)record.userPointerB, record);
+		} else if (record.userIndexB == BT_USERINFO_TYPE_CAR) {
+			_OnCarCarCollision(car, (Car*)record.userPointerB, record);
+		} else {
+			_OnCarWorldCollision(car, record);
+		}
+	}
+}
+
+void Arena::_OnCarBallCollision(Car* car, Ball* ball, const CollisionRecord& record) {
 	using namespace RLConst;
 
-	Vec relBallPos = (ballIsBodyA ? manifoldPoint.m_localPointA : manifoldPoint.m_localPointB) * BT_TO_UU;
-	ball->_OnHit(car, relBallPos, manifoldPoint.m_combinedFriction, manifoldPoint.m_combinedRestitution, gameMode, _mutatorConfig, tickCount);
+	Vec relBallPos = (record.shouldSwap ? record.localPointA : record.localPointB) * BT_TO_UU;
+	
+	// Process ball hit (friction/restitution already set in callback)
+	ball->_OnHitDeferred(car, relBallPos, gameMode, _mutatorConfig, tickCount);
 	
 	// Track which car last hit the ball
 	ball->_internalState.lastHitCarID = car->id;
@@ -346,12 +378,8 @@ void Arena::_BtCallback_OnCarBallCollision(Car* car, Ball* ball, btManifoldPoint
 		_ballTouchCallback.func(this, car, _ballTouchCallback.userInfo);
 }
 
-void Arena::_BtCallback_OnCarCarCollision(Car* car1, Car* car2, btManifoldPoint& manifoldPoint) {
+void Arena::_OnCarCarCollision(Car* car1, Car* car2, const CollisionRecord& record) {
 	using namespace RLConst;
-
-	// Manually override manifold friction/restitution
-	manifoldPoint.m_combinedFriction = RLConst::CARCAR_COLLISION_FRICTION;
-	manifoldPoint.m_combinedRestitution = RLConst::CARCAR_COLLISION_RESTITUTION;
 
 	// Test collision both ways
 	for (int i = 0; i < 2; i++) {
@@ -381,8 +409,8 @@ void Arena::_BtCallback_OnCarCarCollision(Car* car1, Car* car2, btManifoldPoint&
 
 			if (speedTowardsOtherCar > otherCarAwaySpeed) { // Going towards other car faster than they are going away
 
-				Vec localPoint = isSwapped ? manifoldPoint.m_localPointB : manifoldPoint.m_localPointA;
-				bool hitWithBumper = (localPoint.x * BT_TO_UU) > BUMP_MIN_FORWARD_DIST;
+				btVector3 localPoint = isSwapped ? record.localPointB : record.localPointA;
+				bool hitWithBumper = (localPoint.x() * BT_TO_UU) > BUMP_MIN_FORWARD_DIST;
 				if (hitWithBumper) {
 
 					bool isDemo;
@@ -430,13 +458,9 @@ void Arena::_BtCallback_OnCarCarCollision(Car* car1, Car* car2, btManifoldPoint&
 	}
 }
 
-void Arena::_BtCallback_OnCarWorldCollision(Car* car, btCollisionObject* world, btManifoldPoint& manifoldPoint) {
+void Arena::_OnCarWorldCollision(Car* car, const CollisionRecord& record) {
 	car->_internalState.worldContact.hasContact = true;
-	car->_internalState.worldContact.contactNormal = manifoldPoint.m_normalWorldOnB;
-
-	// Manually override manifold friction/restitution
-	manifoldPoint.m_combinedFriction = _mutatorConfig.carWorldFriction;
-	manifoldPoint.m_combinedRestitution = _mutatorConfig.carWorldRestitution;
+	car->_internalState.worldContact.contactNormal = record.normalWorldOnB;
 }
 
 Arena::Arena(GameMode gameMode, const ArenaConfig& config, float tickRate) : _mutatorConfig(gameMode), _config(config) {
@@ -762,10 +786,20 @@ void Arena::Step(int ticksToSimulate) {
 		ball->_PreTickUpdate(gameMode, tickTime);
 		if (_profilerCallback.func) _profilerCallback.func("BallPreTickUpdate", false, _profilerCallback.userInfo);
 
+		// Clear collision tracker before physics step
+		_contactTracker.Clear();
+		
 		// Profiling: Bullet Physics
 		if (_profilerCallback.func) _profilerCallback.func("BulletPhysics", true, _profilerCallback.userInfo);
 		_bulletWorld.stepSimulation(tickTime, 0, tickTime);
 		if (_profilerCallback.func) _profilerCallback.func("BulletPhysics", false, _profilerCallback.userInfo);
+
+		// Process recorded collision events (deferred from callback)
+		if (_profilerCallback.func) _profilerCallback.func("CollisionProcessing", true, _profilerCallback.userInfo);
+		for (const auto& record : _contactTracker.records) {
+			_ProcessCollisionRecord(record);
+		}
+		if (_profilerCallback.func) _profilerCallback.func("CollisionProcessing", false, _profilerCallback.userInfo);
 
 		// Profiling: Car PostTickUpdate
 		if (_profilerCallback.func) _profilerCallback.func("CarPostTickUpdate", true, _profilerCallback.userInfo);

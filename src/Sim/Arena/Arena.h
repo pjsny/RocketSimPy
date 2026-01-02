@@ -26,6 +26,29 @@ typedef std::function<void(class Arena* arena, Car* bumper, Car* victim, bool is
 typedef std::function<void(class Arena* arena, Car* car, BoostPad* boostPad, void* userInfo)> BoostPickupEventFn;
 typedef std::function<void(class Arena* arena, Car* car, void* userInfo)> BallTouchEventFn;
 
+// Collision record for deferred processing (recorded during physics step, processed after)
+struct CollisionRecord {
+	int userIndexA;
+	int userIndexB;
+	void* userPointerA;
+	void* userPointerB;
+	btVector3 localPointA;
+	btVector3 localPointB;
+	btVector3 normalWorldOnB;
+	float combinedFriction;
+	float combinedRestitution;
+	bool shouldSwap;
+};
+
+// Tracks collision events during physics step for deferred processing
+class ContactTracker {
+public:
+	std::vector<CollisionRecord> records;
+	
+	void Clear() { records.clear(); }
+	void Reserve(size_t n) { records.reserve(n); }
+};
+
 // The container for all game simulation
 // Stores cars, the ball, all arena collisions, and manages the overall game state
 class Arena {
@@ -96,6 +119,9 @@ public:
 	std::vector<btBvhTriangleMeshShape*> _worldCollisionBvhShapes = {};
 	std::vector<btStaticPlaneShape*> _worldCollisionPlaneShapes = {};
 	std::vector<btRigidBody*> _worldDropshotTileRBs = {};
+
+	// Collision tracking for deferred processing
+	ContactTracker _contactTracker;
 
 	struct {
 		GoalScoreEventFn func = NULL;
@@ -187,9 +213,13 @@ public:
 		const btCollisionObjectWrapper* colObjB, int partID_B, int indexB
 	);
 
-	void _BtCallback_OnCarBallCollision(Car* car, Ball* ball, btManifoldPoint& manifoldPoint, bool ballIsBodyA);
-	void _BtCallback_OnCarCarCollision(Car* car1, Car* car2, btManifoldPoint& manifoldPoint);
-	void _BtCallback_OnCarWorldCollision(Car* car, btCollisionObject* worldObject, btManifoldPoint& manifoldPoint);
+	// Process a single collision record (called after physics step)
+	void _ProcessCollisionRecord(const CollisionRecord& record);
+	
+	// Collision handlers (called from _ProcessCollisionRecord)
+	void _OnCarBallCollision(Car* car, Ball* ball, const CollisionRecord& record);
+	void _OnCarCarCollision(Car* car1, Car* car2, const CollisionRecord& record);
+	void _OnCarWorldCollision(Car* car, const CollisionRecord& record);
 
 	const ArenaConfig& GetArenaConfig() const {
 		return _config;

@@ -105,6 +105,12 @@ public:
 		float& outFriction, float& outRestitution,
 		GameMode gameMode, const MutatorConfig& mutatorConfig, uint64_t tickCount
 	);
+	
+	// Deferred version of _OnHit (friction/restitution already set in callback)
+	void _OnHitDeferred(
+		class Car* car, Vec relPos,
+		GameMode gameMode, const MutatorConfig& mutatorConfig, uint64_t tickCount
+	);
 	void _OnWorldCollision(GameMode gameMode, Vec normal, float tickTime);
 	// Returns true if the tiles state was modified
 	bool _OnDropshotTileCollision(
