@@ -397,6 +397,11 @@ TEST_F(ArenaTest, LastHitCarIDTracked) {
 
 // Test that boost pads are sorted to match RLBot/RLGym ordering
 TEST_F(ArenaTest, BoostPadsSortedByYThenX) {
+    // Skip if SOCCAR collision meshes aren't loaded
+    if (RocketSim::GetArenaCollisionShapes(GameMode::SOCCAR).empty()) {
+        GTEST_SKIP() << "SOCCAR collision meshes not available";
+    }
+    
     Arena* arena = Arena::Create(GameMode::SOCCAR, ArenaConfig(), 120.0f);
     
     const auto& pads = arena->GetBoostPads();
@@ -425,6 +430,11 @@ TEST_F(ArenaTest, BoostPadsSortedByYThenX) {
 
 // Test boost pads exist and are accessible
 TEST_F(ArenaTest, BoostPadsExist) {
+    // Skip if SOCCAR collision meshes aren't loaded
+    if (RocketSim::GetArenaCollisionShapes(GameMode::SOCCAR).empty()) {
+        GTEST_SKIP() << "SOCCAR collision meshes not available";
+    }
+    
     Arena* arena = Arena::Create(GameMode::SOCCAR, ArenaConfig(), 120.0f);
     
     const auto& pads = arena->GetBoostPads();
