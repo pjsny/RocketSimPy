@@ -571,6 +571,166 @@ class TestKwargsConstructors:
         assert mat.forward.z == 0
 
 
+class TestCarDemoCallback:
+    """Test separate car demo callback."""
+
+    def test_car_demo_callback_is_set(self):
+        """Test that demo callback can be set separately from bump callback."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        demo_results = []
+
+        def on_demo(arena, bumper, victim, data):
+            demo_results.append((bumper.id, victim.id, data))
+
+        prev = arena.set_car_demo_callback(on_demo, "test_data")
+        assert prev == (None, None)
+
+        # Set again - should return previous
+        prev = arena.set_car_demo_callback(lambda **kwargs: None, None)
+        assert prev[0] == on_demo
+        assert prev[1] == "test_data"
+
+    def test_demo_callback_only_for_demos(self):
+        """Test that demo callback only fires for actual demos, not bumps."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        orange = arena.add_car(rs.Team.ORANGE, rs.CarConfig(rs.CarConfig.OCTANE))
+        blue = arena.add_car(rs.Team.BLUE, rs.CarConfig(rs.CarConfig.OCTANE))
+
+        demo_results = []
+        bump_results = []
+
+        def on_demo(arena, bumper, victim, data):
+            demo_results.append((bumper.id, victim.id))
+
+        def on_bump(arena, bumper, victim, is_demo, data):
+            bump_results.append((bumper.id, victim.id, is_demo))
+
+        arena.set_car_demo_callback(on_demo, None)
+        arena.set_car_bump_callback(on_bump, None)
+
+        # Set up orange car at origin
+        orange_state = rs.CarState()
+        orange_state.pos = rs.Vec(0, 0, 17)
+        orange.set_state(orange_state)
+
+        # Set up blue car coming in fast (demo speed)
+        blue_state = rs.CarState()
+        blue_state.pos = rs.Vec(-300, 0, 17)
+        blue_state.vel = rs.Vec(2300, 0, 0)
+        blue_state.boost = 100
+        blue.set_state(blue_state)
+
+        controls = rs.CarControls()
+        controls.throttle = 1
+        controls.boost = True
+        blue.set_controls(controls)
+
+        arena.step(15)
+
+        # Demo callback should have fired exactly once
+        assert len(demo_results) == 1
+        # Bump callback should have fired for the demo
+        demo_bumps = [r for r in bump_results if r[2]]  # is_demo=True
+        assert len(demo_bumps) >= 1
+
+
+class TestGetCarsSorted:
+    """Test that get_cars returns cars sorted by id."""
+
+    def test_get_cars_sorted_by_id(self):
+        """Cars should be returned sorted by id for consistent order."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+
+        # Add cars in various teams/orders
+        car1 = arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        car2 = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        car3 = arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        car4 = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+
+        cars = arena.get_cars()
+        ids = [c.id for c in cars]
+
+        # IDs should be sorted
+        assert ids == sorted(ids)
+
+    def test_get_cars_order_after_removal(self):
+        """Sorting should work correctly after removing cars."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+
+        car1 = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        car2 = arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        car3 = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+
+        # Remove middle car
+        arena.remove_car(car2)
+
+        cars = arena.get_cars()
+        ids = [c.id for c in cars]
+
+        assert ids == sorted(ids)
+        assert len(cars) == 2
+
+
+class TestRemoveCarById:
+    """Test remove_car with car id instead of Car object."""
+
+    def test_remove_car_by_id(self):
+        """Should be able to remove car by id."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        car_id = car.id
+
+        assert len(arena.get_cars()) == 1
+
+        # Remove by id
+        arena.remove_car(car_id)
+
+        assert len(arena.get_cars()) == 0
+
+    def test_remove_car_by_invalid_id_raises(self):
+        """Removing by invalid id should raise."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+
+        with pytest.raises(Exception):
+            arena.remove_car(99999)
+
+    def test_remove_car_by_object_still_works(self):
+        """Original remove_car(car) should still work."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+
+        arena.remove_car(car)
+
+        assert len(arena.get_cars()) == 0
+
+
+class TestDemoedCarState:
+    """Test that demoed cars preserve their state until respawn."""
+
+    def test_demoed_car_preserves_position(self):
+        """Demoed car should keep its position from time of demo."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+
+        # Set known position
+        state = rs.CarState()
+        state.pos = rs.Vec(1000, 2000, 17)
+        state.vel = rs.Vec(100, 0, 0)
+        car.set_state(state)
+
+        # Demolish the car
+        car.demolish()
+
+        # Step the simulation
+        arena.step(10)
+
+        # Check state - position should be preserved
+        new_state = car.get_state()
+        assert new_state.is_demoed
+        assert new_state.pos.x == pytest.approx(1000, abs=1)
+        assert new_state.pos.y == pytest.approx(2000, abs=1)
+
+
 class TestVecRichComparison:
     """Test Vec rich comparison operators."""
 

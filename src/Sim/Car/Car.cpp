@@ -7,14 +7,17 @@
 RS_NS_START
 
 // Update our internal state from bullet and return it
+// NOTE: When demoed, we preserve the state from the moment of demo until respawn
 CarState Car::GetState() {
-	_internalState.pos = _rigidBody.getWorldTransform().m_origin * BT_TO_UU;
+	if (!_internalState.isDemoed) {
+		_internalState.pos = _rigidBody.getWorldTransform().m_origin * BT_TO_UU;
 
-	// NOTE: rotMat already updated at the start of Car::_PostTickUpdate()
+		// NOTE: rotMat already updated at the start of Car::_PostTickUpdate()
 
-	_internalState.vel = _rigidBody.m_linearVelocity * BT_TO_UU;
+		_internalState.vel = _rigidBody.m_linearVelocity * BT_TO_UU;
 
-	_internalState.angVel = _rigidBody.m_angularVelocity;
+		_internalState.angVel = _rigidBody.m_angularVelocity;
+	}
 
 	return _internalState;
 }

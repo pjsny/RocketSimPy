@@ -19,6 +19,7 @@
 #include <unordered_map>
 #include <memory>
 #include <cstring>
+#include <algorithm>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -87,6 +88,8 @@ struct ArenaWrapper {
     nb::object goal_score_data;
     nb::object car_bump_callback;
     nb::object car_bump_data;
+    nb::object car_demo_callback;  // Separate demo callback
+    nb::object car_demo_data;
     nb::object boost_pickup_callback;
     nb::object boost_pickup_data;
     nb::object ball_touch_callback;
@@ -140,9 +143,22 @@ struct ArenaWrapper {
             
             if (isDemo) {
                 self->car_stats[bumper->id].demos++;
+                
+                // Call separate demo callback if set
+                if (self->car_demo_callback) {
+                    nb::gil_scoped_acquire gil;
+                    try {
+                        self->car_demo_callback(
+                            "arena"_a = nb::cast(self, nb::rv_policy::reference),
+                            "bumper"_a = nb::cast(bumper, nb::rv_policy::reference),
+                            "victim"_a = nb::cast(victim, nb::rv_policy::reference),
+                            "data"_a = self->car_demo_data
+                        );
+                    } catch (...) {}
+                }
             }
             
-            // Call bump callback if set
+            // Call bump callback if set (for all bumps including demos)
             if (self->car_bump_callback) {
                 nb::gil_scoped_acquire gil;
                 try {
@@ -225,6 +241,8 @@ struct ArenaWrapper {
             cloned->goal_score_data = goal_score_data;
             cloned->car_bump_callback = car_bump_callback;
             cloned->car_bump_data = car_bump_data;
+            cloned->car_demo_callback = car_demo_callback;
+            cloned->car_demo_data = car_demo_data;
             cloned->boost_pickup_callback = boost_pickup_callback;
             cloned->boost_pickup_data = boost_pickup_data;
             cloned->ball_touch_callback = ball_touch_callback;
@@ -827,12 +845,28 @@ NB_MODULE(RocketSim, m) {
         .def("clone", [](ArenaWrapper* a, bool copy_callbacks) { return a->clone(copy_callbacks); },
              nb::rv_policy::take_ownership, "copy_callbacks"_a = false)
         .def("add_car", &ArenaWrapper::add_car, "team"_a, "config"_a, nb::rv_policy::reference)
-        .def("remove_car", &ArenaWrapper::remove_car)
+        .def("remove_car", [](ArenaWrapper* a, nb::object car_or_id) {
+            Car* car = nullptr;
+            if (nb::isinstance<Car>(car_or_id)) {
+                car = nb::cast<Car*>(car_or_id);
+            } else {
+                // Assume it's an ID
+                uint32_t id = nb::cast<uint32_t>(car_or_id);
+                car = a->arena->GetCar(id);
+                if (!car) {
+                    throw std::invalid_argument("No car with id " + std::to_string(id));
+                }
+            }
+            a->car_stats.erase(car->id);
+            a->arena->RemoveCar(car);
+        }, "car_or_id"_a, "Remove a car by Car object or car id")
         .def("get_cars", [](ArenaWrapper* a) {
             std::vector<Car*> cars;
             for (auto* car : a->arena->GetCars()) {
                 cars.push_back(car);
             }
+            // Sort by id for consistent order
+            std::sort(cars.begin(), cars.end(), [](Car* a, Car* b) { return a->id < b->id; });
             return cars;
         }, nb::rv_policy::reference)
         .def("get_car_from_id", [](ArenaWrapper* a, uint32_t id, nb::object default_val) -> nb::object {
@@ -899,6 +933,14 @@ NB_MODULE(RocketSim, m) {
             return nb::make_tuple(prev_cb, prev_data);
         }, "callback"_a, "data"_a = nb::none(),
            "Set car bump callback. callback(arena, bumper, victim, is_demo, data) called with kwargs. Returns previous (callback, data).")
+        .def("set_car_demo_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
+            nb::object prev_cb = a->car_demo_callback ? a->car_demo_callback : nb::none();
+            nb::object prev_data = a->car_demo_data ? a->car_demo_data : nb::none();
+            a->car_demo_callback = callback;
+            a->car_demo_data = data;
+            return nb::make_tuple(prev_cb, prev_data);
+        }, "callback"_a, "data"_a = nb::none(),
+           "Set car demo callback. callback(arena, bumper, victim, data) called with kwargs. Returns previous (callback, data).")
         .def("set_boost_pickup_callback", [](ArenaWrapper* a, nb::object callback, nb::object data) {
             if (a->arena->gameMode == GameMode::THE_VOID) {
                 throw std::runtime_error("Cannot set boost pickup callback in THE_VOID game mode");
