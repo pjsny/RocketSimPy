@@ -3,8 +3,28 @@
 
 RS_NS_START
 
+// Fast linear piecewise curve using sorted array (faster than std::map for small N)
 struct LinearPieceCurve {
-	std::map<float, float> valueMappings;
+	struct Point {
+		float input;
+		float output;
+	};
+	
+	// Store points in a fixed-size array (most curves have <= 6 points)
+	static constexpr size_t MAX_POINTS = 8;
+	Point points[MAX_POINTS];
+	size_t numPoints = 0;
+	
+	// Constructor from initializer list of {input, output} pairs
+	constexpr LinearPieceCurve(std::initializer_list<std::pair<float, float>> init) : points{}, numPoints(0) {
+		for (const auto& p : init) {
+			if (numPoints < MAX_POINTS) {
+				points[numPoints++] = {p.first, p.second};
+			}
+		}
+	}
+	
+	constexpr LinearPieceCurve() : points{}, numPoints(0) {}
 
 	float GetOutput(float input, float defaultOutput = 1) const;
 };

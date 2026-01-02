@@ -3,35 +3,32 @@
 RS_NS_START
 
 float LinearPieceCurve::GetOutput(float input, float defaultOutput) const {
-	float output = input;
-
-	if (!valueMappings.empty()) {
-
-		// Make sure it isnt before/at the first value mapping
-		auto& firstValPair = *valueMappings.begin();
-		if (input <= firstValPair.first)
-			return firstValPair.second;
-
-		for (auto itr = std::next(valueMappings.begin()); itr != valueMappings.end(); itr++) {
-			if (itr->first > input) {
-				// Found the point bigger than it! Get surrounding
-				auto& afterPair = *itr;
-				auto& beforePair = *std::prev(itr);
-
-				float rangeBetween = afterPair.first - beforePair.first;
-				float valDiffBetween = afterPair.second - beforePair.second;
-				float linearInterpFactor = (input - beforePair.first) / rangeBetween;
-				return beforePair.second + valDiffBetween * linearInterpFactor;
-			}
-		}
-
-		// Must be beyond the largest input mapping, return that
-		return std::prev(valueMappings.end())->second;
-	} else {
+	if (numPoints == 0)
 		return defaultOutput;
+	
+	// Before first point
+	if (input <= points[0].input)
+		return points[0].output;
+	
+	// Linear search through points (fast for small N, better cache locality than map)
+	for (size_t i = 1; i < numPoints; i++) {
+		if (points[i].input > input) {
+			// Interpolate between points[i-1] and points[i]
+			const Point& before = points[i - 1];
+			const Point& after = points[i];
+			
+			// Guard against division by zero (degenerate segments)
+			float dx = after.input - before.input;
+			if (dx <= 0.0f)
+				return before.output;
+			
+			float t = (input - before.input) / dx;
+			return before.output + (after.output - before.output) * t;
+		}
 	}
-
-	return output;
+	
+	// Beyond last point
+	return points[numPoints - 1].output;
 }
 
 btVector3 Math::RoundVec(btVector3 vec, float precision) {

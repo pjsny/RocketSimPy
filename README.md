@@ -1,17 +1,17 @@
 # RocketSimPy
 
-**A modernized fork of [RocketSim](https://github.com/ZealanL/RocketSim) with official Python bindings**
+A fork of [RocketSim](https://github.com/ZealanL/RocketSim) with Python bindings.
 
-A C++ library for simulating Rocket League games at maximum efficiency, now with first-class Python support via [nanobind](https://github.com/wjakob/nanobind).
+RocketSim is a C++ library that simulates Rocket League physics. This fork adds [nanobind](https://github.com/wjakob/nanobind) bindings so you can use it from Python.
 
-## What's Different
+## What's different from upstream
 
-This fork builds on ZealanL's original RocketSim and takes inspiration from [mtheall's Python bindings](https://github.com/mtheall/RocketSim):
+Built on ZealanL's RocketSim, with ideas from [mtheall's Python bindings](https://github.com/mtheall/RocketSim):
 
-- **nanobind bindings** — Faster, cleaner Python bindings (not pybind11)
-- **Full test coverage** — C++ and Python test suites with CI
-- **RLGym compatible** — Drop-in replacement for [rlgym](https://rlgym.org/) environments
-- **Modern build system** — scikit-build-core + uv for Python packaging
+- nanobind instead of pybind11 (smaller, faster builds)
+- C++ and Python test suites with CI
+- Works with [rlgym](https://rlgym.org/)
+- scikit-build-core + uv for packaging
 
 ## Quick Start
 
@@ -33,31 +33,31 @@ arena.step(100)
 
 ## Speed
 
-RocketSim simulates ~20 minutes of game time per second on a single thread. With 12 threads, that's ~10 days of game time per minute.
+About 20 minutes of game time per second on one thread. 12 threads gets you ~10 days of game time per minute.
 
 ## Accuracy
 
-Accurate enough to train ML bots to SSL level, simulate shots, air control, and pinches. Small errors accumulate over time — best suited for simulation with consistent feedback.
+Good enough to train ML bots to SSL, simulate shots, air control, pinches. Errors accumulate over time so it works best when you're running short simulations with frequent resets.
 
-## Installation
+## Building
 
 1. Clone this repo
-2. Dump arena collision meshes using [RLArenaCollisionDumper](https://github.com/ZealanL/RLArenaCollisionDumper)
+2. Get arena collision meshes with [RLArenaCollisionDumper](https://github.com/ZealanL/RLArenaCollisionDumper)
 3. Build: `mkdir build && cd build && cmake .. && make`
 
-For Python bindings, see [python/README.md](python/README.md).
+For Python, see [python/README.md](python/README.md).
 
-## Documentation
+## Docs
 
-- Original docs: [zealanl.github.io/RocketSimDocs](https://zealanl.github.io/RocketSimDocs/)
+- Original RocketSim docs: [zealanl.github.io/RocketSimDocs](https://zealanl.github.io/RocketSimDocs/)
 - Python API: [python/README.md](python/README.md)
 
 ## Credits
 
-- [ZealanL/RocketSim](https://github.com/ZealanL/RocketSim) — Original implementation
-- [mtheall/RocketSim](https://github.com/mtheall/RocketSim) — Python bindings inspiration
-- [RLGym](https://rlgym.org/) — Target compatibility
+- [ZealanL/RocketSim](https://github.com/ZealanL/RocketSim)
+- [mtheall/RocketSim](https://github.com/mtheall/RocketSim)
+- [RLGym](https://rlgym.org/)
 
-## Legal Notice
+## Legal
 
-RocketSim replicates Rocket League's game logic but contains no code from the game.
+RocketSim replicates Rocket League physics but doesn't contain any code from the game.

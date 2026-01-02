@@ -51,6 +51,11 @@ case "$MODE" in
             "$BENCHMARK_EXE" --readme --ticks "$TICKS" --seed "$SEED" --meshes "$MESHES_PATH"
         fi
         ;;
+    stress|--stress)
+        SEED="${2:-0}"
+        echo -e "${BLUE}Running stress benchmark (6 cars, 100 episodes, 1M ticks, ball-chasing AI)...${NC}"
+        "$BENCHMARK_EXE" --stress --seed "$SEED" --meshes "$MESHES_PATH"
+        ;;
     profile|--profile)
         CARS="${2:-2}"
         PROFILE_OPT="${3:-}"
@@ -80,6 +85,7 @@ case "$MODE" in
         echo ""
         echo "Modes:"
         echo "  readme              README benchmark (default)"
+        echo "  stress [SEED]       Stress benchmark - 6 cars, ball-chasing AI (matches rocketsim-rs)"
         echo "  profile [CARS] [fast]  Phase profiling (default: 2 cars)"
         echo "                         Add 'fast' to disable sub-phase profiling"
         echo "  compare [CARS]      Compare configurations (default: 2 cars)"
@@ -89,6 +95,8 @@ case "$MODE" in
         echo "Examples:"
         echo "  ./benchmark.sh readme"
         echo "  ./benchmark.sh readme 12345 1000000 1"
+        echo "  ./benchmark.sh stress                 # Stress test with seed 0"
+        echo "  ./benchmark.sh stress 42              # Stress test with custom seed"
         echo "  ./benchmark.sh profile 4              # With sub-phase details (slower)"
         echo "  ./benchmark.sh profile 8 fast         # Without sub-phases (accurate timing)"
         echo "  ./benchmark.sh compare 2"
