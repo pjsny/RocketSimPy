@@ -230,6 +230,148 @@ class TestGetGymState:
         assert 1 in teams  # Orange
 
 
+class TestInvertedGymState:
+    """Test inverted/mirrored gym state for RL training with both team perspectives."""
+
+    def test_ball_state_inverted_shape(self):
+        """Ball state with inverted=True should have shape (2, 18)."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        
+        normal = arena.get_ball_state_array(inverted=False)
+        inverted = arena.get_ball_state_array(inverted=True)
+        
+        assert normal.shape == (18,)
+        assert inverted.shape == (2, 18)
+
+    def test_car_state_inverted_shape(self):
+        """Car state with inverted=True should have shape (2, 26)."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        
+        normal = arena.get_car_state_array(car, inverted=False)
+        inverted = arena.get_car_state_array(car, inverted=True)
+        
+        assert normal.shape == (26,)
+        assert inverted.shape == (2, 26)
+
+    def test_cars_state_inverted_shape(self):
+        """Cars state with inverted=True should have shape (N, 2, 26)."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        
+        normal = arena.get_cars_state_array(inverted=False)
+        inverted = arena.get_cars_state_array(inverted=True)
+        
+        assert normal.shape == (2, 26)
+        assert inverted.shape == (2, 2, 26)
+
+    def test_gym_state_inverted_shapes(self):
+        """Gym state with inverted=True should have inverted shapes."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        
+        normal = arena.get_gym_state(inverted=False)
+        inverted = arena.get_gym_state(inverted=True)
+        
+        assert normal["ball"].shape == (18,)
+        assert normal["cars"].shape == (2, 26)
+        
+        assert inverted["ball"].shape == (2, 18)
+        assert inverted["cars"].shape == (2, 2, 26)
+
+    def test_inverted_row0_matches_normal(self):
+        """Row 0 of inverted state should match normal state."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        arena.step(10)
+        
+        ball_normal = arena.get_ball_state_array(inverted=False)
+        ball_inverted = arena.get_ball_state_array(inverted=True)
+        
+        np.testing.assert_allclose(ball_normal, ball_inverted[0], rtol=1e-6)
+        
+        car_normal = arena.get_car_state_array(car, inverted=False)
+        car_inverted = arena.get_car_state_array(car, inverted=True)
+        
+        np.testing.assert_allclose(car_normal, car_inverted[0], rtol=1e-6)
+
+    def test_inverted_row1_mirrors_xy(self):
+        """Row 1 should have x and y negated, z unchanged."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        
+        # Set a known position
+        state = car.get_state()
+        state.pos = rs.Vec(100, 200, 50)
+        state.vel = rs.Vec(10, 20, 5)
+        state.ang_vel = rs.Vec(1, 2, 3)
+        car.set_state(state)
+        
+        inverted = arena.get_car_state_array(car, inverted=True)
+        
+        # Row 0: normal (100, 200, 50)
+        assert abs(inverted[0, 0] - 100) < 0.01
+        assert abs(inverted[0, 1] - 200) < 0.01
+        assert abs(inverted[0, 2] - 50) < 0.01
+        
+        # Row 1: inverted (-100, -200, 50)
+        assert abs(inverted[1, 0] - (-100)) < 0.01
+        assert abs(inverted[1, 1] - (-200)) < 0.01
+        assert abs(inverted[1, 2] - 50) < 0.01
+        
+        # Velocity: Row 0 = (10, 20, 5), Row 1 = (-10, -20, 5)
+        assert abs(inverted[0, 3] - 10) < 0.01
+        assert abs(inverted[1, 3] - (-10)) < 0.01
+        
+        # Angular velocity: Row 0 = (1, 2, 3), Row 1 = (-1, -2, 3)
+        assert abs(inverted[0, 6] - 1) < 0.01
+        assert abs(inverted[1, 6] - (-1)) < 0.01
+        assert abs(inverted[0, 8] - 3) < 0.01
+        assert abs(inverted[1, 8] - 3) < 0.01  # z unchanged
+
+    def test_mirrored_cars_have_matching_inverted_states(self):
+        """Blue and Orange cars mirrored at kickoff should have matching inverted states."""
+        arena = rs.Arena(rs.GameMode.SOCCAR)
+        car_a = arena.add_car(rs.Team.BLUE, rs.CarConfig())
+        car_b = arena.add_car(rs.Team.ORANGE, rs.CarConfig())
+        
+        # Reset to kickoff - cars spawn mirrored
+        arena.reset_to_random_kickoff(seed=999)
+        
+        # Apply same controls
+        controls = rs.CarControls()
+        controls.throttle = 1.0
+        controls.yaw = 1.0
+        controls.pitch = 1.0
+        controls.roll = 1.0
+        controls.jump = True
+        car_a.set_controls(controls)
+        car_b.set_controls(controls)
+        
+        # Step simulation
+        for _ in range(100):
+            arena.step()
+        
+        # Get states with inversion
+        state_a = arena.get_car_state_array(car_a, inverted=True)
+        state_b = arena.get_car_state_array(car_b, inverted=True)
+        
+        # car_a normal [0] should match car_b inverted [1] (and vice versa)
+        # Position
+        np.testing.assert_allclose(state_a[0, 0:3], state_b[1, 0:3], rtol=1e-3)
+        np.testing.assert_allclose(state_a[1, 0:3], state_b[0, 0:3], rtol=1e-3)
+        
+        # Velocity
+        np.testing.assert_allclose(state_a[0, 3:6], state_b[1, 3:6], rtol=1e-3)
+        np.testing.assert_allclose(state_a[1, 3:6], state_b[0, 3:6], rtol=1e-3)
+        
+        # Angular velocity
+        np.testing.assert_allclose(state_a[0, 6:9], state_b[1, 6:9], rtol=1e-3)
+        np.testing.assert_allclose(state_a[1, 6:9], state_b[0, 6:9], rtol=1e-3)
+
+
 class TestArenaClone:
     """Test arena cloning preserves state."""
 

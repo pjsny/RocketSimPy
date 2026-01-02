@@ -345,40 +345,36 @@ struct ArenaWrapper {
     // Efficient gym state getters - return numpy arrays with minimal overhead
     // ========================================================================
     
-    nb::ndarray<nb::numpy, float> get_ball_state() {
-        BallState bs = arena->ball->GetState();
-        float* data = new float[18];
-        
-        // Position
-        data[0] = bs.pos.x; data[1] = bs.pos.y; data[2] = bs.pos.z;
-        // Velocity
-        data[3] = bs.vel.x; data[4] = bs.vel.y; data[5] = bs.vel.z;
-        // Angular velocity
-        data[6] = bs.angVel.x; data[7] = bs.angVel.y; data[8] = bs.angVel.z;
-        // Rotation matrix (flattened row-major)
-        data[9] = bs.rotMat.forward.x; data[10] = bs.rotMat.forward.y; data[11] = bs.rotMat.forward.z;
-        data[12] = bs.rotMat.right.x; data[13] = bs.rotMat.right.y; data[14] = bs.rotMat.right.z;
-        data[15] = bs.rotMat.up.x; data[16] = bs.rotMat.up.y; data[17] = bs.rotMat.up.z;
-        
-        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
-        return nb::ndarray<nb::numpy, float>(data, {18}, owner);
+    // Helper: Write ball state to array at offset, optionally inverted
+    // Inversion mirrors coordinates for opposing team perspective: (-x, -y, z)
+    static void write_ball_state(float* data, const BallState& bs, bool inverted) {
+        float sign = inverted ? -1.0f : 1.0f;
+        // Position (inverted: -x, -y, z)
+        data[0] = sign * bs.pos.x; data[1] = sign * bs.pos.y; data[2] = bs.pos.z;
+        // Velocity (inverted: -x, -y, z)
+        data[3] = sign * bs.vel.x; data[4] = sign * bs.vel.y; data[5] = bs.vel.z;
+        // Angular velocity (inverted: -x, -y, z)
+        data[6] = sign * bs.angVel.x; data[7] = sign * bs.angVel.y; data[8] = bs.angVel.z;
+        // Rotation matrix (each vector inverted: -x, -y, z)
+        data[9] = sign * bs.rotMat.forward.x; data[10] = sign * bs.rotMat.forward.y; data[11] = bs.rotMat.forward.z;
+        data[12] = sign * bs.rotMat.right.x; data[13] = sign * bs.rotMat.right.y; data[14] = bs.rotMat.right.z;
+        data[15] = sign * bs.rotMat.up.x; data[16] = sign * bs.rotMat.up.y; data[17] = bs.rotMat.up.z;
     }
     
-    nb::ndarray<nb::numpy, float> get_car_state(Car* car) {
-        CarState cs = car->GetState();
-        float* data = new float[26];
-        
-        // Position
-        data[0] = cs.pos.x; data[1] = cs.pos.y; data[2] = cs.pos.z;
-        // Velocity
-        data[3] = cs.vel.x; data[4] = cs.vel.y; data[5] = cs.vel.z;
-        // Angular velocity
-        data[6] = cs.angVel.x; data[7] = cs.angVel.y; data[8] = cs.angVel.z;
-        // Rotation matrix
-        data[9] = cs.rotMat.forward.x; data[10] = cs.rotMat.forward.y; data[11] = cs.rotMat.forward.z;
-        data[12] = cs.rotMat.right.x; data[13] = cs.rotMat.right.y; data[14] = cs.rotMat.right.z;
-        data[15] = cs.rotMat.up.x; data[16] = cs.rotMat.up.y; data[17] = cs.rotMat.up.z;
-        // State flags
+    // Helper: Write car state to array at offset, optionally inverted
+    static void write_car_state(float* data, const CarState& cs, bool inverted, bool ball_touched) {
+        float sign = inverted ? -1.0f : 1.0f;
+        // Position (inverted: -x, -y, z)
+        data[0] = sign * cs.pos.x; data[1] = sign * cs.pos.y; data[2] = cs.pos.z;
+        // Velocity (inverted: -x, -y, z)
+        data[3] = sign * cs.vel.x; data[4] = sign * cs.vel.y; data[5] = cs.vel.z;
+        // Angular velocity (inverted: -x, -y, z)
+        data[6] = sign * cs.angVel.x; data[7] = sign * cs.angVel.y; data[8] = cs.angVel.z;
+        // Rotation matrix (each vector inverted: -x, -y, z)
+        data[9] = sign * cs.rotMat.forward.x; data[10] = sign * cs.rotMat.forward.y; data[11] = cs.rotMat.forward.z;
+        data[12] = sign * cs.rotMat.right.x; data[13] = sign * cs.rotMat.right.y; data[14] = cs.rotMat.right.z;
+        data[15] = sign * cs.rotMat.up.x; data[16] = sign * cs.rotMat.up.y; data[17] = cs.rotMat.up.z;
+        // State flags (not inverted)
         data[18] = cs.boost;
         data[19] = cs.isOnGround ? 1.0f : 0.0f;
         data[20] = cs.hasJumped ? 1.0f : 0.0f;
@@ -386,47 +382,85 @@ struct ArenaWrapper {
         data[22] = cs.hasFlipped ? 1.0f : 0.0f;
         data[23] = cs.isDemoed ? 1.0f : 0.0f;
         data[24] = cs.isSupersonic ? 1.0f : 0.0f;
-        // Ball touched since last gym state
-        bool ball_touched = cs.ballHitInfo.isValid && 
-                           cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
         data[25] = ball_touched ? 1.0f : 0.0f;
-        
-        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
-        return nb::ndarray<nb::numpy, float>(data, {26}, owner);
     }
     
-    nb::ndarray<nb::numpy, float> get_cars_state() {
+    // Get ball state array
+    // If inverted=false: returns shape (18,) with normal view
+    // If inverted=true: returns shape (2, 18) with [normal, inverted] views
+    nb::ndarray<nb::numpy, float> get_ball_state(bool inverted = false) {
+        BallState bs = arena->ball->GetState();
+        
+        if (!inverted) {
+            float* data = new float[18];
+            write_ball_state(data, bs, false);
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {18}, owner);
+        } else {
+            float* data = new float[2 * 18];
+            write_ball_state(data, bs, false);        // Row 0: normal
+            write_ball_state(data + 18, bs, true);    // Row 1: inverted
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {2, 18}, owner);
+        }
+    }
+    
+    // Get single car state array
+    // If inverted=false: returns shape (26,) with normal view
+    // If inverted=true: returns shape (2, 26) with [normal, inverted] views
+    nb::ndarray<nb::numpy, float> get_car_state(Car* car, bool inverted = false) {
+        CarState cs = car->GetState();
+        bool ball_touched = cs.ballHitInfo.isValid && 
+                           cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
+        
+        if (!inverted) {
+            float* data = new float[26];
+            write_car_state(data, cs, false, ball_touched);
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {26}, owner);
+        } else {
+            float* data = new float[2 * 26];
+            write_car_state(data, cs, false, ball_touched);       // Row 0: normal
+            write_car_state(data + 26, cs, true, ball_touched);   // Row 1: inverted
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {2, 26}, owner);
+        }
+    }
+    
+    // Get all cars state array
+    // If inverted=false: returns shape (N, 26) with normal views
+    // If inverted=true: returns shape (N, 2, 26) with [normal, inverted] views per car
+    nb::ndarray<nb::numpy, float> get_cars_state(bool inverted = false) {
         const auto& cars = arena->GetCars();
         size_t n = cars.size();
-        float* data = new float[n * 26];
         
-        size_t i = 0;
-        for (Car* car : cars) {
-            CarState cs = car->GetState();
-            float* row = data + i * 26;
-            
-            row[0] = cs.pos.x; row[1] = cs.pos.y; row[2] = cs.pos.z;
-            row[3] = cs.vel.x; row[4] = cs.vel.y; row[5] = cs.vel.z;
-            row[6] = cs.angVel.x; row[7] = cs.angVel.y; row[8] = cs.angVel.z;
-            row[9] = cs.rotMat.forward.x; row[10] = cs.rotMat.forward.y; row[11] = cs.rotMat.forward.z;
-            row[12] = cs.rotMat.right.x; row[13] = cs.rotMat.right.y; row[14] = cs.rotMat.right.z;
-            row[15] = cs.rotMat.up.x; row[16] = cs.rotMat.up.y; row[17] = cs.rotMat.up.z;
-            row[18] = cs.boost;
-            row[19] = cs.isOnGround ? 1.0f : 0.0f;
-            row[20] = cs.hasJumped ? 1.0f : 0.0f;
-            row[21] = cs.hasDoubleJumped ? 1.0f : 0.0f;
-            row[22] = cs.hasFlipped ? 1.0f : 0.0f;
-            row[23] = cs.isDemoed ? 1.0f : 0.0f;
-            row[24] = cs.isSupersonic ? 1.0f : 0.0f;
-            // Ball touched since last gym state
-            bool ball_touched = cs.ballHitInfo.isValid && 
-                               cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
-            row[25] = ball_touched ? 1.0f : 0.0f;
-            i++;
+        if (!inverted) {
+            float* data = new float[n * 26];
+            size_t i = 0;
+            for (Car* car : cars) {
+                CarState cs = car->GetState();
+                bool ball_touched = cs.ballHitInfo.isValid && 
+                                   cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
+                write_car_state(data + i * 26, cs, false, ball_touched);
+                i++;
+            }
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {n, 26}, owner);
+        } else {
+            float* data = new float[n * 2 * 26];
+            size_t i = 0;
+            for (Car* car : cars) {
+                CarState cs = car->GetState();
+                bool ball_touched = cs.ballHitInfo.isValid && 
+                                   cs.ballHitInfo.tickCountWhenHit >= last_gym_state_tick;
+                float* base = data + i * 2 * 26;
+                write_car_state(base, cs, false, ball_touched);       // Row 0: normal
+                write_car_state(base + 26, cs, true, ball_touched);   // Row 1: inverted
+                i++;
+            }
+            nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
+            return nb::ndarray<nb::numpy, float>(data, {n, 2, 26}, owner);
         }
-        
-        nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
-        return nb::ndarray<nb::numpy, float>(data, {n, 26}, owner);
     }
     
     nb::ndarray<nb::numpy, float> get_pads_state() {
@@ -443,10 +477,12 @@ struct ArenaWrapper {
     }
     
     // Full gym state in one call - most efficient for RLGym
-    nb::dict get_gym_state() {
+    // If inverted=true, ball and cars arrays include both normal and inverted views
+    // Ball shape: (18,) or (2, 18), Cars shape: (N, 26) or (N, 2, 26)
+    nb::dict get_gym_state(bool inverted = false) {
         nb::dict result;
-        result["ball"] = get_ball_state();
-        result["cars"] = get_cars_state();
+        result["ball"] = get_ball_state(inverted);
+        result["cars"] = get_cars_state(inverted);
         result["pads"] = get_pads_state();
         result["blue_score"] = blue_score;
         result["orange_score"] = orange_score;
@@ -1205,16 +1241,30 @@ NB_MODULE(RocketSim, m) {
         }, "callback"_a, "data"_a = nb::none(),
            "Set ball touch callback. callback(arena, car, data) called with kwargs. Returns previous (callback, data).")
         // ====== EFFICIENT GYM STATE GETTERS ======
-        .def("get_ball_state_array", &ArenaWrapper::get_ball_state,
-             "Get ball state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9)]")
-        .def("get_car_state_array", &ArenaWrapper::get_car_state, "car"_a,
-             "Get single car state as numpy array [pos(3), vel(3), ang_vel(3), rot_mat(9), boost, on_ground, jumped, double_jumped, flipped, demoed, supersonic, ball_touched]")
-        .def("get_cars_state_array", &ArenaWrapper::get_cars_state,
-             "Get all cars state as (N, 26) numpy array")
+        .def("get_ball_state_array", &ArenaWrapper::get_ball_state, "inverted"_a = false,
+             R"(Get ball state as numpy array.
+Args:
+    inverted: If False, returns shape (18,) [pos(3), vel(3), ang_vel(3), rot_mat(9)]
+              If True, returns shape (2, 18) with [normal, inverted] views for both team perspectives)")
+        .def("get_car_state_array", &ArenaWrapper::get_car_state, "car"_a, "inverted"_a = false,
+             R"(Get single car state as numpy array.
+Args:
+    car: The car to get state for
+    inverted: If False, returns shape (26,) with normal view
+              If True, returns shape (2, 26) with [normal, inverted] views)")
+        .def("get_cars_state_array", &ArenaWrapper::get_cars_state, "inverted"_a = false,
+             R"(Get all cars state as numpy array.
+Args:
+    inverted: If False, returns shape (N, 26) with normal views
+              If True, returns shape (N, 2, 26) with [normal, inverted] views per car)")
         .def("get_pads_state_array", &ArenaWrapper::get_pads_state,
              "Get boost pad states as numpy array of 0/1 values")
-        .def("get_gym_state", &ArenaWrapper::get_gym_state,
-             "Get complete gym state as dict with numpy arrays - most efficient for RLGym")
+        .def("get_gym_state", &ArenaWrapper::get_gym_state, "inverted"_a = false,
+             R"(Get complete gym state as dict with numpy arrays.
+Args:
+    inverted: If True, ball and cars arrays include both normal and inverted views.
+              Inverted view mirrors coordinates for opposing team: (-x, -y, z).
+              Ball shape: (18,) or (2, 18), Cars shape: (N, 26) or (N, 2, 26))")
         // ====== RLVISER INTEGRATION ======
         .def("render", [](ArenaWrapper* a) {
             return RLViser::get_socket().send_arena_state(a->arena.get());
