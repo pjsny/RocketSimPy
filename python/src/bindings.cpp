@@ -16,6 +16,8 @@
 #include "Sim/CarControls.h"
 #include "Sim/MutatorConfig/MutatorConfig.h"
 
+#include "RLViserSocket.h"
+
 #include <unordered_map>
 #include <memory>
 #include <cstring>
@@ -988,7 +990,14 @@ NB_MODULE(RocketSim, m) {
         .def("get_pads_state_array", &ArenaWrapper::get_pads_state,
              "Get boost pad states as numpy array of 0/1 values")
         .def("get_gym_state", &ArenaWrapper::get_gym_state,
-             "Get complete gym state as dict with numpy arrays - most efficient for RLGym");
+             "Get complete gym state as dict with numpy arrays - most efficient for RLGym")
+        // ====== RLVISER INTEGRATION ======
+        .def("render", [](ArenaWrapper* a) {
+            return RLViser::get_socket().send_arena_state(a->arena.get());
+        }, "Send arena state to RLViser for rendering (uses global socket)")
+        .def("get_game_state", [](ArenaWrapper* a) {
+            return RLViser::GameState::from_arena(a->arena.get());
+        }, "Get the current game state as an RLViser GameState object");
 
     // ========== Car config presets ==========
     m.attr("CAR_CONFIG_OCTANE") = &CAR_CONFIG_OCTANE;
@@ -1006,4 +1015,154 @@ NB_MODULE(RocketSim, m) {
     m.attr("BREAKOUT") = 3;
     m.attr("HYBRID") = 4;
     m.attr("MERC") = 5;
+
+    // ========================================================================
+    // RLViser Module - UDP communication with RLViser visualizer
+    // ========================================================================
+    auto rlviser = m.def_submodule("rlviser", "RLViser UDP communication for visualization");
+
+    // Port constants
+    rlviser.attr("RLVISER_PORT") = RLViser::RLVISER_PORT;
+    rlviser.attr("ROCKETSIM_PORT") = RLViser::ROCKETSIM_PORT;
+
+    // UdpPacketType enum
+    nb::enum_<RLViser::UdpPacketType>(rlviser, "UdpPacketType")
+        .value("QUIT", RLViser::UdpPacketType::Quit)
+        .value("GAME_STATE", RLViser::UdpPacketType::GameState)
+        .value("CONNECTION", RLViser::UdpPacketType::Connection)
+        .value("PAUSED", RLViser::UdpPacketType::Paused)
+        .value("SPEED", RLViser::UdpPacketType::Speed)
+        .value("RENDER", RLViser::UdpPacketType::Render);
+
+    // BoostPadInfo class
+    nb::class_<RLViser::BoostPadInfo>(rlviser, "BoostPadInfo")
+        .def(nb::init<>())
+        .def_rw("is_active", &RLViser::BoostPadInfo::isActive)
+        .def_rw("cooldown", &RLViser::BoostPadInfo::cooldown)
+        .def_rw("pos", &RLViser::BoostPadInfo::pos)
+        .def_rw("is_big", &RLViser::BoostPadInfo::isBig);
+
+    // CarInfo class
+    nb::class_<RLViser::CarInfo>(rlviser, "CarInfo")
+        .def(nb::init<>())
+        .def_rw("id", &RLViser::CarInfo::id)
+        .def_rw("team", &RLViser::CarInfo::team)
+        .def_rw("state", &RLViser::CarInfo::state)
+        .def_rw("config", &RLViser::CarInfo::config);
+
+    // BallStateInfo class
+    nb::class_<RLViser::BallStateInfo>(rlviser, "BallStateInfo")
+        .def(nb::init<>())
+        .def_rw("state", &RLViser::BallStateInfo::state);
+
+    // GameState class
+    nb::class_<RLViser::GameState>(rlviser, "GameState")
+        .def(nb::init<>())
+        .def_rw("tick_count", &RLViser::GameState::tickCount)
+        .def_rw("tick_rate", &RLViser::GameState::tickRate)
+        .def_rw("game_mode", &RLViser::GameState::gameMode)
+        .def_rw("pads", &RLViser::GameState::pads)
+        .def_rw("cars", &RLViser::GameState::cars)
+        .def_rw("ball", &RLViser::GameState::ball)
+        .def("to_bytes", [](const RLViser::GameState& self) {
+            auto bytes = self.to_bytes();
+            return nb::bytes(reinterpret_cast<const char*>(bytes.data()), bytes.size());
+        })
+        .def_static("from_bytes", [](nb::bytes data) {
+            return RLViser::GameState::from_bytes(
+                reinterpret_cast<const uint8_t*>(data.c_str()), 
+                data.size()
+            );
+        })
+        .def_static("from_arena", [](ArenaWrapper* arena) {
+            return RLViser::GameState::from_arena(arena->arena.get());
+        }, "arena"_a)
+        .def_static("from_raw_arena", [](Arena* arena) {
+            return RLViser::GameState::from_arena(arena);
+        }, "arena"_a);
+
+    // ReturnMessage class
+    nb::class_<RLViser::ReturnMessage>(rlviser, "ReturnMessage")
+        .def(nb::init<>())
+        .def_prop_ro("game_state", [](const RLViser::ReturnMessage& self) -> nb::object {
+            if (self.gameState) return nb::cast(*self.gameState);
+            return nb::none();
+        })
+        .def_prop_ro("speed", [](const RLViser::ReturnMessage& self) -> nb::object {
+            if (self.speed) return nb::cast(*self.speed);
+            return nb::none();
+        })
+        .def_prop_ro("paused", [](const RLViser::ReturnMessage& self) -> nb::object {
+            if (self.paused) return nb::cast(*self.paused);
+            return nb::none();
+        });
+
+    // RLViserSocket class
+    nb::class_<RLViser::RLViserSocket>(rlviser, "Socket")
+        .def(nb::init<>())
+        .def("init", &RLViser::RLViserSocket::init,
+             "Initialize the UDP socket (binds to port 34254)")
+        .def("connect", &RLViser::RLViserSocket::connect,
+             "Connect to RLViser (sends connection packet)")
+        .def("close", &RLViser::RLViserSocket::close,
+             "Close the socket and send quit packet")
+        .def("is_connected", &RLViser::RLViserSocket::is_connected)
+        .def("send_game_state", &RLViser::RLViserSocket::send_game_state, "state"_a,
+             "Send a GameState to RLViser")
+        .def("send_arena_state", [](RLViser::RLViserSocket& self, ArenaWrapper* arena) {
+            return self.send_arena_state(arena->arena.get());
+        }, "arena"_a, "Send current arena state to RLViser")
+        .def("send_raw_arena_state", &RLViser::RLViserSocket::send_arena_state, "arena"_a,
+             "Send current arena state to RLViser (raw Arena)")
+        .def("send_game_speed", &RLViser::RLViserSocket::send_game_speed, "speed"_a,
+             "Report game speed to RLViser (1.0 = normal)")
+        .def("send_paused", &RLViser::RLViserSocket::send_paused, "paused"_a,
+             "Report pause state to RLViser")
+        .def("receive_messages", &RLViser::RLViserSocket::receive_messages,
+             "Poll for messages from RLViser (non-blocking)")
+        .def("is_paused", &RLViser::RLViserSocket::is_paused,
+             "Get current pause state")
+        .def("get_game_speed", &RLViser::RLViserSocket::get_game_speed,
+             "Get current game speed");
+
+    // Convenience functions using global socket
+    rlviser.def("init", []() { return RLViser::get_socket().init(); },
+        "Initialize the global RLViser socket");
+    
+    rlviser.def("connect", []() { return RLViser::get_socket().connect(); },
+        "Connect the global socket to RLViser");
+    
+    rlviser.def("close", []() { RLViser::get_socket().close(); },
+        "Close the global RLViser socket");
+    
+    rlviser.def("is_connected", []() { return RLViser::get_socket().is_connected(); },
+        "Check if global socket is connected");
+    
+    rlviser.def("render", [](ArenaWrapper* arena) {
+        return RLViser::get_socket().send_arena_state(arena->arena.get());
+    }, "arena"_a, "Send arena state to RLViser for rendering");
+    
+    rlviser.def("render_raw", [](Arena* arena) {
+        return RLViser::get_socket().send_arena_state(arena);
+    }, "arena"_a, "Send raw Arena state to RLViser for rendering");
+    
+    rlviser.def("set_game_speed", [](float speed) {
+        return RLViser::get_socket().send_game_speed(speed);
+    }, "speed"_a, "Set game speed (1.0 = normal)");
+    
+    rlviser.def("set_paused", [](bool paused) {
+        return RLViser::get_socket().send_paused(paused);
+    }, "paused"_a, "Set pause state");
+    
+    rlviser.def("get_state_set", []() {
+        return RLViser::get_socket().receive_messages();
+    }, "Poll for state changes from RLViser");
+    
+    rlviser.def("is_paused", []() {
+        return RLViser::get_socket().is_paused();
+    }, "Get current pause state");
+    
+    rlviser.def("get_game_speed", []() {
+        return RLViser::get_socket().get_game_speed();
+    }, "Get current game speed");
 }
