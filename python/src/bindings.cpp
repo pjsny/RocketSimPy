@@ -28,6 +28,7 @@
 #include <future>
 #include <mutex>
 #include <atomic>
+#include <sstream>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -145,7 +146,8 @@ struct ArenaWrapper {
         return stored_exception != nullptr;
     }
     
-    ArenaWrapper(GameMode mode, float tick_rate, ArenaMemWeightMode mem_weight_mode = ArenaMemWeightMode::HEAVY) 
+    ArenaWrapper(GameMode mode, float tick_rate, ArenaMemWeightMode mem_weight_mode = ArenaMemWeightMode::HEAVY,
+                 std::optional<std::vector<BoostPadConfig>> custom_boost_pads = std::nullopt) 
         : arena(nullptr, [](Arena* a) { if (a) delete a; })
     {
         // Validate tick rate (RL uses 120, but allow reasonable range)
@@ -155,6 +157,13 @@ struct ArenaWrapper {
         
         ArenaConfig config{};
         config.memWeightMode = mem_weight_mode;
+        
+        // Handle custom boost pads
+        if (custom_boost_pads && !custom_boost_pads->empty()) {
+            config.useCustomBoostPads = true;
+            config.customBoostPads = *custom_boost_pads;
+        }
+        
         arena.reset(Arena::Create(mode, config, tick_rate));
         setup_callbacks();
     }
@@ -776,6 +785,22 @@ NB_MODULE(RocketSim, m) {
             s.lastHitCarID = nb::cast<uint32_t>(t[4]);
         });
 
+    // ========== BoostPadConfig class ==========
+    nb::class_<BoostPadConfig>(m, "BoostPadConfig")
+        .def(nb::init<>())
+        .def("__init__", [](BoostPadConfig* self, std::optional<Vec> pos, std::optional<bool> is_big) {
+            new (self) BoostPadConfig();
+            if (pos) self->pos = *pos;
+            if (is_big) self->isBig = *is_big;
+        }, "pos"_a = std::nullopt, "is_big"_a = std::nullopt)
+        .def_rw("pos", &BoostPadConfig::pos)
+        .def_rw("is_big", &BoostPadConfig::isBig)
+        .def("__repr__", [](const BoostPadConfig& c) {
+            std::ostringstream ss;
+            ss << "BoostPadConfig(pos=Vec(" << c.pos.x << ", " << c.pos.y << ", " << c.pos.z << "), is_big=" << (c.isBig ? "True" : "False") << ")";
+            return ss.str();
+        });
+
     // ========== BoostPadState class ==========
     nb::class_<BoostPadState>(m, "BoostPadState")
         .def(nb::init<>())
@@ -1092,8 +1117,17 @@ NB_MODULE(RocketSim, m) {
 
     // ========== ArenaWrapper class (with RLGym features) ==========
     nb::class_<ArenaWrapper>(m, "Arena")
-        .def(nb::init<GameMode, float, ArenaMemWeightMode>(), 
-             "game_mode"_a, "tick_rate"_a = 120.0f, "mem_weight_mode"_a = ArenaMemWeightMode::HEAVY)
+        .def(nb::init<GameMode, float, ArenaMemWeightMode, std::optional<std::vector<BoostPadConfig>>>(), 
+             "game_mode"_a, "tick_rate"_a = 120.0f, "mem_weight_mode"_a = ArenaMemWeightMode::HEAVY,
+             "custom_boost_pads"_a = std::nullopt,
+             R"(Create a new Arena.
+
+Args:
+    game_mode: The game mode (SOCCAR, HOOPS, etc.)
+    tick_rate: Physics tick rate in Hz (default: 120)
+    mem_weight_mode: Memory optimization mode (default: HEAVY)
+    custom_boost_pads: Optional list of BoostPadConfig for custom boost pad layouts.
+                       If provided, replaces the default boost pads for the game mode.)")
         .def("step", &ArenaWrapper::step, "ticks_to_simulate"_a = 1)
         .def("stop", &ArenaWrapper::stop)
         .def("clone", [](ArenaWrapper* a, bool copy_callbacks) { return a->clone(copy_callbacks); },
