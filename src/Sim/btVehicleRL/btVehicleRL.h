@@ -10,26 +10,50 @@ struct btWheelInfoRL : public btWheelInfo {
 	bool m_isInContactWithWorld = false;
 	float m_steerAngle = 0;
 
-	btVector3 m_velAtContactPoint;
+	btVector3 m_velAtContactPoint = btVector3(0, 0, 0);
 
 	// lat = sideways, long = forward
 	float m_latFriction = 0, m_longFriction = 0;
-	btVector3 m_impulse;
+	btVector3 m_impulse = btVector3(0, 0, 0);
 
-	float m_suspensionForceScale;
+	float m_suspensionForceScale = 1.0f;
 
 	// Extra force applied when compressed significantly
 	float m_extraPushback = 0;
 
 	// Temporal coherence cache for fast-path raycast
 	bool m_hasLastHit = false;
-	btVector3 m_lastHitNormal;
-	btVector3 m_lastHitPoint;
+	btVector3 m_lastHitNormal = btVector3(0, 0, 1);
+	btVector3 m_lastHitPoint = btVector3(0, 0, 0);
 	btCollisionObject* m_lastHitObject = nullptr;
 
-	btWheelInfoRL() {}
+	btWheelInfoRL() {
+		// Initialize base class members that aren't initialized by default constructor
+		m_raycastInfo.m_contactNormalWS = btVector3(0, 0, 1);
+		m_raycastInfo.m_contactPointWS = btVector3(0, 0, 0);
+		m_raycastInfo.m_suspensionLength = 0;
+		m_raycastInfo.m_isInContact = false;
+		m_raycastInfo.m_groundObject = nullptr;
+		m_clippedInvContactDotSuspension = 1;
+		m_suspensionRelativeVelocity = 0;
+		m_wheelsSuspensionForce = 0;
+		m_skidInfo = 0;
+		m_clientInfo = nullptr;
+	}
 
-	btWheelInfoRL(btWheelInfoConstructionInfo& constructionInfo) : btWheelInfo(constructionInfo) {}
+	btWheelInfoRL(btWheelInfoConstructionInfo& constructionInfo) : btWheelInfo(constructionInfo) {
+		// Initialize members that btWheelInfo constructor doesn't initialize
+		m_raycastInfo.m_contactNormalWS = btVector3(0, 0, 1);
+		m_raycastInfo.m_contactPointWS = btVector3(0, 0, 0);
+		m_raycastInfo.m_suspensionLength = constructionInfo.m_suspensionRestLength;
+		m_raycastInfo.m_isInContact = false;
+		m_raycastInfo.m_groundObject = nullptr;
+		m_clippedInvContactDotSuspension = 1;
+		m_suspensionRelativeVelocity = 0;
+		m_wheelsSuspensionForce = 0;
+		m_skidInfo = 0;
+		m_clientInfo = nullptr;
+	}
 };
 
 // This is a modified version of btRaycastVehicle to more accurately follow Rocket League

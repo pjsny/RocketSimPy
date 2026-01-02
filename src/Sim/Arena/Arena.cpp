@@ -68,10 +68,10 @@ bool Arena::_AddCarFromPtr(Car* car) {
 	car->id = ++_lastCarID;
 
 	if (_carIDMap.find(car->id) == _carIDMap.end()) {
-		assert(!_cars.count(car));
+		assert(std::find(_cars.begin(), _cars.end(), car) == _cars.end());
 		
 		_carIDMap[car->id] = car;
-		_cars.insert(car);
+		_cars.push_back(car);
 		return true;
 
 	} else {
@@ -85,7 +85,10 @@ bool Arena::RemoveCar(uint32_t id) {
 	if (itr != _carIDMap.end()) {
 		Car* car = itr->second;
 		_carIDMap.erase(itr);
-		_cars.erase(car);
+		auto carIt = std::find(_cars.begin(), _cars.end(), car);
+		if (carIt != _cars.end()) {
+			_cars.erase(carIt);
+		}
 		_bulletWorld.removeCollisionObject(&car->_rigidBody);
 		if (ownsCars)
 			delete car;

@@ -57,10 +57,10 @@ public:
 	GameMode gameMode;
 
 	uint32_t _lastCarID = 0;
-	std::unordered_set<Car*> _cars;
+	std::vector<Car*> _cars;  // Use vector for deterministic iteration order
 	bool ownsCars = true; // If true, deleting this arena instance deletes all cars
 
-	std::unordered_map<uint32_t, Car*> _carIDMap;
+	std::unordered_map<uint32_t, Car*> _carIDMap;  // For O(1) lookup by ID
 	
 	Ball* ball;
 	bool ownsBall = true; // If true, deleting this arena instance deletes the ball
@@ -88,7 +88,7 @@ public:
 	// Total ticks this arena instance has been simulated for, never resets
 	uint64_t tickCount = 0;
 
-	const std::unordered_set<Car*>& GetCars() { return _cars; }
+	const std::vector<Car*>& GetCars() { return _cars; }
 	const std::vector<BoostPad*>& GetBoostPads() { return _boostPads; }
 
 	// Returns true if added, false if car was already added

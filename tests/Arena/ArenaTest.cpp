@@ -1,4 +1,5 @@
 #include <gtest/gtest.h>
+#include <algorithm>
 #include "RocketSim.h"
 #include "../TestUtils.h"
 #include "Sim/Arena/Arena.h"
@@ -50,7 +51,7 @@ TEST_F(ArenaTest, AddCar) {
     
     const auto& cars = arena->GetCars();
     EXPECT_EQ(cars.size(), 1);
-    EXPECT_NE(cars.find(car), cars.end());
+    EXPECT_NE(std::find(cars.begin(), cars.end(), car), cars.end());
     
     delete arena;
 }
