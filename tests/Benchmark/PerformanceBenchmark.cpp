@@ -1,4 +1,5 @@
 #include "READMEBenchmark.h"
+#include "StressBenchmark.h"
 #include "PhaseProfiler.h"
 #include "ProfilerUtils.h"
 #include <iostream>
@@ -13,6 +14,7 @@ void PrintUsage(const char* program_name) {
     std::cout << "\n";
     std::cout << "Modes:\n";
     std::cout << "  --readme              Run README benchmark (4 cars, SOCCAR, 1M ticks) [default]\n";
+    std::cout << "  --stress              Run stress benchmark (6 cars, 100 episodes, ball-chasing AI)\n";
     std::cout << "  --profile             Run phase profiling mode\n";
     std::cout << "\n";
     std::cout << "Options:\n";
@@ -28,6 +30,8 @@ void PrintUsage(const char* program_name) {
     std::cout << "Examples:\n";
     std::cout << "  " << program_name << " --readme\n";
     std::cout << "  " << program_name << " --readme --seed 12345\n";
+    std::cout << "  " << program_name << " --stress\n";
+    std::cout << "  " << program_name << " --stress --seed 0\n";
     std::cout << "  " << program_name << " --profile --cars 4\n";
     std::cout << "  " << program_name << " --profile --compare-configs\n";
     std::cout << "  " << program_name << " --readme --threads 12\n";
@@ -36,6 +40,7 @@ void PrintUsage(const char* program_name) {
 struct BenchmarkArgs {
     enum Mode {
         README,
+        STRESS,
         PROFILE
     };
     
@@ -57,6 +62,8 @@ BenchmarkArgs ParseArgs(int argc, char* argv[]) {
         
         if (arg == "--readme") {
             args.mode = BenchmarkArgs::README;
+        } else if (arg == "--stress") {
+            args.mode = BenchmarkArgs::STRESS;
         } else if (arg == "--profile") {
             args.mode = BenchmarkArgs::PROFILE;
         } else if (arg == "--ticks" && i + 1 < argc) {
@@ -165,6 +172,23 @@ int main(int argc, char* argv[]) {
             
             READMEBenchmark::PrintResults(result);
         }
+    } else if (args.mode == BenchmarkArgs::STRESS) {
+        // Stress benchmark (matches stress.rs from rocketsim-oxide benchmark)
+        std::cout << "Running stress benchmark...\n";
+        std::cout << "Configuration: " << StressBenchmark::NUM_CARS << " cars, " 
+                  << StressBenchmark::NUM_EPISODES << " episodes, "
+                  << ProfilerUtils::FormatNumber(StressBenchmark::NUM_EPISODE_TICKS) << " ticks/episode\n";
+        if (args.seed != 0) {
+            std::cout << "Seed: " << args.seed << "\n";
+        }
+        std::cout << "\n";
+        
+        StressBenchmark::BenchmarkResult result = StressBenchmark::RunBenchmark(
+            args.collision_meshes_path,
+            args.seed
+        );
+        
+        StressBenchmark::PrintResults(result);
     } else if (args.mode == BenchmarkArgs::PROFILE) {
         // Initialize RocketSim
         std::filesystem::path meshes_path = args.collision_meshes_path;

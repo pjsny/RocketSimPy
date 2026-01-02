@@ -33,6 +33,7 @@ if(BUILD_BENCHMARK)
     add_executable(PerformanceBenchmark
         Benchmark/PerformanceBenchmark.cpp
         Benchmark/READMEBenchmark.cpp
+        Benchmark/StressBenchmark.cpp
         Benchmark/PhaseProfiler.cpp
         Benchmark/ProfilerUtils.cpp
     )
