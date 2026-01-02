@@ -10,19 +10,13 @@ using namespace RocketSim;
 class CarPhysicsTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        // Initialize RocketSim (using memory mode to avoid needing collision meshes)
-        std::map<GameMode, std::vector<FileData>> emptyMeshes;
-        InitFromMem(emptyMeshes, true);
-        
+        // RocketSim initialized in main.cpp with collision_meshes
         arena = TestUtils::CreateTestArena(GameMode::THE_VOID, 120.0f);
         car = arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
     }
     
     void SetUpWithGround() {
-        // Initialize RocketSim (using memory mode to avoid needing collision meshes)
-        std::map<GameMode, std::vector<FileData>> emptyMeshes;
-        InitFromMem(emptyMeshes, true);
-        
+        // RocketSim initialized in main.cpp with collision_meshes
         arena = TestUtils::CreateTestArena(GameMode::THE_VOID_WITH_GROUND, 120.0f);
         car = arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
     }

@@ -8,8 +8,7 @@ using namespace RocketSim;
 class ArenaTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        std::map<GameMode, std::vector<FileData>> emptyMeshes;
-        InitFromMem(emptyMeshes, true);
+        // RocketSim initialized in main.cpp with collision_meshes
     }
 };
 
@@ -391,6 +390,65 @@ TEST_F(ArenaTest, LastHitCarIDTracked) {
             break;
         }
     }
+    
+    delete arena;
+}
+
+// Test that boost pads are sorted to match RLBot/RLGym ordering
+TEST_F(ArenaTest, BoostPadsSortedByYThenX) {
+    Arena* arena = Arena::Create(GameMode::SOCCAR, ArenaConfig(), 120.0f);
+    
+    const auto& pads = arena->GetBoostPads();
+    ASSERT_GT(pads.size(), 0);
+    
+    // SOCCAR should have 34 boost pads (6 big + 28 small)
+    EXPECT_EQ(pads.size(), 34);
+    
+    // Verify pads are sorted by Y first, then X
+    for (size_t i = 1; i < pads.size(); i++) {
+        Vec prevPos = pads[i-1]->config.pos;
+        Vec currPos = pads[i]->config.pos;
+        
+        // Either Y should be greater, or Y is equal and X should be greater or equal
+        bool correctOrder = (currPos.y > prevPos.y) || 
+                           (currPos.y == prevPos.y && currPos.x >= prevPos.x);
+        
+        EXPECT_TRUE(correctOrder) 
+            << "Pad " << i << " is not correctly sorted. "
+            << "Prev: (" << prevPos.x << ", " << prevPos.y << "), "
+            << "Curr: (" << currPos.x << ", " << currPos.y << ")";
+    }
+    
+    delete arena;
+}
+
+// Test boost pads exist and are accessible
+TEST_F(ArenaTest, BoostPadsExist) {
+    Arena* arena = Arena::Create(GameMode::SOCCAR, ArenaConfig(), 120.0f);
+    
+    const auto& pads = arena->GetBoostPads();
+    ASSERT_EQ(pads.size(), 34);
+    
+    // Count big and small pads
+    int bigCount = 0, smallCount = 0;
+    for (auto* pad : pads) {
+        if (pad->config.isBig) bigCount++;
+        else smallCount++;
+    }
+    
+    EXPECT_EQ(bigCount, 6);
+    EXPECT_EQ(smallCount, 28);
+    
+    delete arena;
+}
+
+// Test boost pad sorting with THE_VOID (no meshes needed, but also no pads)
+TEST_F(ArenaTest, BoostPadsSortingVoidMode) {
+    Arena* arena = TestUtils::CreateTestArena(GameMode::THE_VOID, 120.0f);
+    
+    // THE_VOID has no boost pads
+    const auto& pads = arena->GetBoostPads();
+    EXPECT_EQ(pads.size(), 0);
     
     delete arena;
 }

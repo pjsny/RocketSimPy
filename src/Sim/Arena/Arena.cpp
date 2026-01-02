@@ -1,6 +1,8 @@
 #include "Arena.h"
 #include "../../RocketSim.h"
 
+#include <algorithm>
+
 #include "../../../libsrc/bullet3-3.24/BulletCollision/BroadphaseCollision/btAxisSweep3.h"
 #include "../../../libsrc/bullet3-3.24/BulletCollision/BroadphaseCollision/btDbvtBroadphase.h"
 #include "../../../libsrc/bullet3-3.24/BulletCollision/BroadphaseCollision/btSimpleBroadphase.h"
@@ -591,6 +593,13 @@ Arena::Arena(GameMode gameMode, const ArenaConfig& config, float tickRate) : _mu
 				_boostPadGrid.Add(pad);
 			}
 		}
+
+		// Sort boost pads to match RLBot/RLGym ordering (by Y first, then X)
+		std::sort(_boostPads.begin(), _boostPads.end(), [](BoostPad* a, BoostPad* b) {
+			if (a->config.pos.y != b->config.pos.y)
+				return a->config.pos.y < b->config.pos.y;
+			return a->config.pos.x < b->config.pos.x;
+		});
 	}
 
 	// Set internal tick callback

@@ -11,9 +11,7 @@ using namespace RocketSim;
 class StateManagementTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        std::map<GameMode, std::vector<FileData>> emptyMeshes;
-        InitFromMem(emptyMeshes, true);
-        
+        // RocketSim initialized in main.cpp with collision_meshes
         arena = TestUtils::CreateTestArena(GameMode::THE_VOID, 120.0f);
         car = arena->AddCar(Team::BLUE, CAR_CONFIG_OCTANE);
     }

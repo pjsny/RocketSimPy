@@ -10,8 +10,7 @@ using namespace RocketSim;
 class IntegrationTest : public ::testing::Test {
 protected:
     void SetUp() override {
-        std::map<GameMode, std::vector<FileData>> emptyMeshes;
-        InitFromMem(emptyMeshes, true);
+        // RocketSim initialized in main.cpp with collision_meshes
     }
 };
 
