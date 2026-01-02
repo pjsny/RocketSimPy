@@ -34,6 +34,13 @@ void Car::SetState(const CarState& state) {
 
 	_velocityImpulseCache = { 0, 0, 0 };
 
+	// Invalidate wheel temporal coherence cache - position has changed discontinuously
+	for (int i = 0; i < _bulletVehicle.getNumWheels(); i++) {
+		auto& wheel = _bulletVehicle.m_wheelInfo[i];
+		wheel.m_hasLastHit = false;
+		wheel.m_lastHitObject = nullptr;
+	}
+
 	_internalState = state;
 	_internalState.tickCountSinceUpdate = 0;
 }

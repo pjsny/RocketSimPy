@@ -38,6 +38,11 @@ struct CollisionRecord {
 	float combinedFriction;
 	float combinedRestitution;
 	bool shouldSwap;
+	
+	// Pre-collision velocities for car-car bump detection
+	// (needed because deferred processing happens after physics resolves collision)
+	btVector3 velA;
+	btVector3 velB;
 };
 
 // Tracks collision events during physics step for deferred processing

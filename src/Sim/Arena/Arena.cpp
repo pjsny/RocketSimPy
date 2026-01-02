@@ -329,6 +329,16 @@ bool Arena::_BulletContactAddedCallback(
 		record.combinedFriction = contactPoint.m_combinedFriction;
 		record.combinedRestitution = contactPoint.m_combinedRestitution;
 		record.shouldSwap = shouldSwap;
+		
+		// Store pre-collision velocities for car-car bump detection
+		// (needed because deferred processing happens after physics resolves collision)
+		if (userIndexB == BT_USERINFO_TYPE_CAR) {
+			Car* carA = (Car*)record.userPointerA;
+			Car* carB = (Car*)record.userPointerB;
+			record.velA = carA->_rigidBody.getLinearVelocity();
+			record.velB = carB->_rigidBody.getLinearVelocity();
+		}
+		
 		arenaInst->_contactTracker.records.push_back(record);
 	} else if (userIndexA == BT_USERINFO_TYPE_BALL && userIndexB == BT_USERINFO_TYPE_DROPSHOT_TILE) {
 		// Dropshot tile collision - process immediately (no car involved)
@@ -403,20 +413,29 @@ void Arena::_OnCarCarCollision(Car* car1, Car* car2, const CollisionRecord& reco
 		if ((state.carContact.otherCarID == car2->id) && (state.carContact.cooldownTimer > 0))
 			continue; // In cooldown
 
-		Vec deltaPos = (otherState.pos - state.pos);
-		if (state.vel.Dot(deltaPos) > 0) { // Going towards other car
+		// Use PRE-COLLISION velocities stored in record (not current post-collision velocities)
+		// This is critical because deferred processing happens after physics has resolved the collision
+		Vec vel1 = isSwapped ? record.velB * BT_TO_UU : record.velA * BT_TO_UU;
+		Vec vel2 = isSwapped ? record.velA * BT_TO_UU : record.velB * BT_TO_UU;
 
-			Vec velDir = state.vel.Normalized();
+		Vec deltaPos = (otherState.pos - state.pos);
+		if (vel1.Dot(deltaPos) > 0) { // Going towards other car
+
+			Vec velDir = vel1.Normalized();
 			Vec dirToOtherCar = deltaPos.Normalized();
 
-			float speedTowardsOtherCar = state.vel.Dot(dirToOtherCar);
-			float otherCarAwaySpeed = otherState.vel.Dot(velDir);
+			float speedTowardsOtherCar = vel1.Dot(dirToOtherCar);
+			float otherCarAwaySpeed = vel2.Dot(velDir);
 
 			if (speedTowardsOtherCar > otherCarAwaySpeed) { // Going towards other car faster than they are going away
 
 				btVector3 localPoint = isSwapped ? record.localPointB : record.localPointA;
 				bool hitWithBumper = (localPoint.x() * BT_TO_UU) > BUMP_MIN_FORWARD_DIST;
 				if (hitWithBumper) {
+
+					// Check if car was supersonic using pre-collision velocity
+					// (state.isSupersonic may be stale due to deferred processing)
+					bool wasSupersonic = vel1.Length() >= SUPERSONIC_START_SPEED;
 
 					bool isDemo;
 					switch (_mutatorConfig.demoMode) {
@@ -427,7 +446,7 @@ void Arena::_OnCarCarCollision(Car* car1, Car* car2, const CollisionRecord& reco
 						isDemo = false;
 						break;
 					default:
-						isDemo = state.isSupersonic;
+						isDemo = wasSupersonic;
 					}
 
 					if (isDemo && !_mutatorConfig.enableTeamDemos)
