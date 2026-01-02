@@ -46,6 +46,9 @@ struct BallState : public PhysState {
 	};
 	DropshotInfo dsInfo;
 
+	// ID of the car that last hit the ball (0 = none)
+	uint32_t lastHitCarID = 0;
+
 	BallState() : PhysState() {
 		pos.z = RLConst::BALL_REST_Z;
 	}

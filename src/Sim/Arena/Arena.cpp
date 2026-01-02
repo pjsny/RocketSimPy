@@ -338,6 +338,9 @@ void Arena::_BtCallback_OnCarBallCollision(Car* car, Ball* ball, btManifoldPoint
 	Vec relBallPos = (ballIsBodyA ? manifoldPoint.m_localPointA : manifoldPoint.m_localPointB) * BT_TO_UU;
 	ball->_OnHit(car, relBallPos, manifoldPoint.m_combinedFriction, manifoldPoint.m_combinedRestitution, gameMode, _mutatorConfig, tickCount);
 	
+	// Track which car last hit the ball
+	ball->_internalState.lastHitCarID = car->id;
+	
 	// Call ball touch callback if set
 	if (_ballTouchCallback.func)
 		_ballTouchCallback.func(this, car, _ballTouchCallback.userInfo);

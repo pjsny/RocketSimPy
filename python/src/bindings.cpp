@@ -451,6 +451,13 @@ NB_MODULE(RocketSim, m) {
             float* data = new float[3]{v.x, v.y, v.z};
             nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
             return nb::ndarray<nb::numpy, float, nb::shape<3>>(data, {3}, owner);
+        })
+        // Pickle support
+        .def("__getstate__", [](const Vec& v) {
+            return nb::make_tuple(v.x, v.y, v.z);
+        })
+        .def("__setstate__", [](Vec& v, nb::tuple t) {
+            new (&v) Vec(nb::cast<float>(t[0]), nb::cast<float>(t[1]), nb::cast<float>(t[2]));
         });
 
     // ========== RotMat class ==========
@@ -481,7 +488,28 @@ NB_MODULE(RocketSim, m) {
             nb::capsule owner(data, [](void* p) noexcept { delete[] static_cast<float*>(p); });
             return nb::ndarray<nb::numpy, float, nb::shape<3, 3>>(data, {3, 3}, owner);
         })
-        .def_static("get_identity", &RotMat::GetIdentity);
+        .def("as_angle", [](const RotMat& m) {
+            return Angle::FromRotMat(m);
+        })
+        .def_static("get_identity", &RotMat::GetIdentity)
+        // Pickle support
+        .def("__getstate__", [](const RotMat& m) {
+            return nb::make_tuple(
+                nb::make_tuple(m.forward.x, m.forward.y, m.forward.z),
+                nb::make_tuple(m.right.x, m.right.y, m.right.z),
+                nb::make_tuple(m.up.x, m.up.y, m.up.z)
+            );
+        })
+        .def("__setstate__", [](RotMat& m, nb::tuple t) {
+            auto fwd = nb::cast<nb::tuple>(t[0]);
+            auto right = nb::cast<nb::tuple>(t[1]);
+            auto up = nb::cast<nb::tuple>(t[2]);
+            new (&m) RotMat(
+                Vec(nb::cast<float>(fwd[0]), nb::cast<float>(fwd[1]), nb::cast<float>(fwd[2])),
+                Vec(nb::cast<float>(right[0]), nb::cast<float>(right[1]), nb::cast<float>(right[2])),
+                Vec(nb::cast<float>(up[0]), nb::cast<float>(up[1]), nb::cast<float>(up[2]))
+            );
+        });
 
     // ========== Angle class ==========
     nb::class_<Angle>(m, "Angle")
@@ -500,7 +528,15 @@ NB_MODULE(RocketSim, m) {
         .def_rw("pitch", &Angle::pitch)
         .def_rw("roll", &Angle::roll)
         .def("to_rot_mat", &Angle::ToRotMat)
-        .def_static("from_rot_mat", &Angle::FromRotMat);
+        .def("as_rot_mat", &Angle::ToRotMat)  // Alias for compatibility
+        .def_static("from_rot_mat", &Angle::FromRotMat)
+        // Pickle support
+        .def("__getstate__", [](const Angle& a) {
+            return nb::make_tuple(a.yaw, a.pitch, a.roll);
+        })
+        .def("__setstate__", [](Angle& a, nb::tuple t) {
+            new (&a) Angle(nb::cast<float>(t[0]), nb::cast<float>(t[1]), nb::cast<float>(t[2]));
+        });
 
     // ========== CarControls class ==========
     nb::class_<CarControls>(m, "CarControls")
@@ -534,7 +570,22 @@ NB_MODULE(RocketSim, m) {
         .def_rw("boost", &CarControls::boost)
         .def_rw("jump", &CarControls::jump)
         .def_rw("handbrake", &CarControls::handbrake)
-        .def("clamp_fix", &CarControls::ClampFix);
+        .def("clamp_fix", &CarControls::ClampFix)
+        // Pickle support
+        .def("__getstate__", [](const CarControls& c) {
+            return nb::make_tuple(c.throttle, c.steer, c.pitch, c.yaw, c.roll, c.boost, c.jump, c.handbrake);
+        })
+        .def("__setstate__", [](CarControls& c, nb::tuple t) {
+            new (&c) CarControls();
+            c.throttle = nb::cast<float>(t[0]);
+            c.steer = nb::cast<float>(t[1]);
+            c.pitch = nb::cast<float>(t[2]);
+            c.yaw = nb::cast<float>(t[3]);
+            c.roll = nb::cast<float>(t[4]);
+            c.boost = nb::cast<bool>(t[5]);
+            c.jump = nb::cast<bool>(t[6]);
+            c.handbrake = nb::cast<bool>(t[7]);
+        });
 
     // ========== BallState class ==========
     nb::class_<BallState>(m, "BallState")
@@ -543,17 +594,21 @@ NB_MODULE(RocketSim, m) {
                            std::optional<Vec> pos,
                            std::optional<Vec> vel,
                            std::optional<Vec> ang_vel,
-                           std::optional<RotMat> rot_mat) {
+                           std::optional<RotMat> rot_mat,
+                           std::optional<uint32_t> last_hit_car_id) {
             new (self) BallState();
             if (pos) self->pos = *pos;
             if (vel) self->vel = *vel;
             if (ang_vel) self->angVel = *ang_vel;
             if (rot_mat) self->rotMat = *rot_mat;
-        }, "pos"_a = std::nullopt, "vel"_a = std::nullopt, "ang_vel"_a = std::nullopt, "rot_mat"_a = std::nullopt)
+            if (last_hit_car_id) self->lastHitCarID = *last_hit_car_id;
+        }, "pos"_a = std::nullopt, "vel"_a = std::nullopt, "ang_vel"_a = std::nullopt, 
+           "rot_mat"_a = std::nullopt, "last_hit_car_id"_a = std::nullopt)
         .def_rw("pos", &BallState::pos)
         .def_rw("vel", &BallState::vel)
         .def_rw("ang_vel", &BallState::angVel)
-        .def_rw("rot_mat", &BallState::rotMat);
+        .def_rw("rot_mat", &BallState::rotMat)
+        .def_rw("last_hit_car_id", &BallState::lastHitCarID);
 
     // ========== BoostPadState class ==========
     nb::class_<BoostPadState>(m, "BoostPadState")
