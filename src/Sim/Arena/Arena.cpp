@@ -2,6 +2,7 @@
 #include "../../RocketSim.h"
 
 #include <algorithm>
+#include <array>
 
 #include "../../../libsrc/bullet3-3.24/BulletCollision/BroadphaseCollision/btAxisSweep3.h"
 #include "../../../libsrc/bullet3-3.24/BulletCollision/BroadphaseCollision/btDbvtBroadphase.h"
@@ -47,6 +48,11 @@ void Arena::SetMutatorConfig(const MutatorConfig& mutatorConfig) {
 	ball->_rigidBody.setFriction(mutatorConfig.ballWorldFriction);
 	ball->_rigidBody.setRestitution(mutatorConfig.ballWorldRestitution);
 	ball->_rigidBody.setDamping(mutatorConfig.ballDrag, 0);
+
+	// Always update collision settings (the comparison doesn't work correctly when
+	// get_mutator_config returns a reference that gets modified before calling this)
+	SetCarBallCollision(this->_mutatorConfig.enableCarBallCollision);
+	SetCarCarCollision(this->_mutatorConfig.enableCarCarCollision);
 }
 
 Car* Arena::AddCar(Team team, const CarConfig& config) {
@@ -134,18 +140,19 @@ void Arena::SetProfilerCallback(ProfilerPhaseCallback callbackFunc, void* userIn
 	_profilerCallback.enableSubphase = enableSubphase;
 }
 
+// Helper to create an index array at compile time
+namespace {
+template <typename T, std::size_t... I>
+constexpr auto make_index_array(std::index_sequence<I...>) {
+	return std::array<T, sizeof...(I)>{{static_cast<T>(I)...}};
+}
+}
+
 void Arena::ResetToRandomKickoff(int seed) {
 	using namespace RLConst;
-	// TODO: Make shuffling of kickoff setup more efficient (?)
 
-	static thread_local std::array<int, CAR_SPAWN_LOCATION_AMOUNT> KICKOFF_ORDER_TEMPLATE = { -1 };
-	if (KICKOFF_ORDER_TEMPLATE[0] == -1) {
-		// Initialize
-		for (int i = 0; i < CAR_SPAWN_LOCATION_AMOUNT; i++)
-			KICKOFF_ORDER_TEMPLATE[i] = i;
-	}
-
-	auto kickoffOrder = KICKOFF_ORDER_TEMPLATE;
+	// Create kickoff order array inline (consistent for each call)
+	auto kickoffOrder = make_index_array<int>(std::make_index_sequence<CAR_SPAWN_LOCATION_AMOUNT>{});
 
 	std::default_random_engine* randEngine;
 	if (seed == -1) {
@@ -778,7 +785,8 @@ Car* Arena::DeserializeNewCar(DataStreamIn& in, Team team) {
 }
 
 void Arena::Step(int ticksToSimulate) {
-	for (int i = 0; i < ticksToSimulate; i++) {
+	_stop = false;
+	for (int i = 0; i < ticksToSimulate && !_stop; i++) {
 
 		_bulletWorld.setWorldUserInfo(this);
 
@@ -884,6 +892,10 @@ void Arena::Step(int ticksToSimulate) {
 
 		tickCount++;
 	}
+}
+
+void Arena::Stop() {
+	_stop = true;
 }
 
 // Returns negative: within
@@ -1214,6 +1226,39 @@ void Arena::_SetupArenaCollisionShapes() {
 			_worldDropshotTileRBs.push_back(tileRB);
 		}
 	}
+}
+
+void Arena::SetCarCarCollision(bool enable) {
+	_mutatorConfig.enableCarCarCollision = enable;
+
+	int mask = btBroadphaseProxy::AllFilter;
+	if (!enable)
+		mask &= ~btBroadphaseProxy::CharacterFilter;
+
+	auto pairCache = _bulletWorld.getBroadphase()->getOverlappingPairCache();
+	auto dispatcher = (btCollisionDispatcher*)_bulletWorld.getDispatcher();
+
+	for (auto& car : _cars) {
+		auto* bp = car->_rigidBody.getBroadphaseHandle();
+		bp->m_collisionFilterMask = mask;
+		// Force removal of all pairs involving this car so they get re-evaluated
+		pairCache->removeOverlappingPairsContainingProxy(bp, dispatcher);
+	}
+}
+
+void Arena::SetCarBallCollision(bool enable) {
+	_mutatorConfig.enableCarBallCollision = enable;
+
+	int mask = btBroadphaseProxy::AllFilter;
+	if (!enable)
+		mask &= ~btBroadphaseProxy::CharacterFilter;
+
+	auto* bp = ball->_rigidBody.getBroadphaseHandle();
+	bp->m_collisionFilterMask = mask;
+	// Force removal of all pairs involving the ball so they get re-evaluated
+	auto pairCache = _bulletWorld.getBroadphase()->getOverlappingPairCache();
+	auto dispatcher = (btCollisionDispatcher*)_bulletWorld.getDispatcher();
+	pairCache->removeOverlappingPairsContainingProxy(bp, dispatcher);
 }
 
 RS_NS_END

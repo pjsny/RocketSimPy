@@ -108,9 +108,14 @@ void Ball::_BulletSetup(GameMode gameMode, btDynamicsWorld* bulletWorld, const M
 
 	_rigidBody.m_noRot = noRot && (_collisionShape->getShapeType() == SPHERE_SHAPE_PROXYTYPE);
 
+	// Calculate collision filter mask based on mutator config
+	int collisionMask = btBroadphaseProxy::AllFilter;
+	if (!mutatorConfig.enableCarBallCollision)
+		collisionMask &= ~btBroadphaseProxy::CharacterFilter;
+
 	bulletWorld->addRigidBody(
 		&_rigidBody,
-		btBroadphaseProxy::DefaultFilter | CollisionMasks::HOOPS_NET | CollisionMasks::DROPSHOT_TILE, btBroadphaseProxy::AllFilter
+		btBroadphaseProxy::DefaultFilter | CollisionMasks::HOOPS_NET | CollisionMasks::DROPSHOT_TILE, collisionMask
 	);
 }
 

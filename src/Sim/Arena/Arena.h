@@ -187,6 +187,9 @@ public:
 	// Simulate everything in the arena for a given number of ticks
 	void Step(int ticksToSimulate = 1);
 
+	// Stop simulation (can be called from within a callback)
+	void Stop();
+
 	void ResetToRandomKickoff(int seed = -1);
 
 	// Returns true if the ball is probably going in, does not account for wall or ceiling bounces
@@ -238,7 +241,14 @@ public:
 	DropshotTilesState GetDropshotTilesState() const { return _dropshotTilesState; };
 	void SetDropshotTilesState(const DropshotTilesState& tilesState);
 
+	// Enable/disable car-car collisions at runtime
+	void SetCarCarCollision(bool enable);
+	// Enable/disable car-ball collisions at runtime
+	void SetCarBallCollision(bool enable);
+
 private:
+	// Whether to stop the simulation early
+	bool _stop = false;
 	
 	// Constructor for use by Arena::Create()
 	Arena(GameMode gameMode, const ArenaConfig& config, float tickRate = 120);

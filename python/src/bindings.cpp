@@ -15,13 +15,19 @@
 #include "Sim/BoostPad/BoostPad.h"
 #include "Sim/CarControls.h"
 #include "Sim/MutatorConfig/MutatorConfig.h"
+#include "Sim/Arena/ArenaConfig/ArenaConfig.h"
 
 #include "RLViserSocket.h"
 
 #include <unordered_map>
+#include <unordered_set>
 #include <memory>
 #include <cstring>
 #include <algorithm>
+#include <thread>
+#include <future>
+#include <mutex>
+#include <atomic>
 
 namespace nb = nanobind;
 using namespace nb::literals;
@@ -103,7 +109,43 @@ struct ArenaWrapper {
     // Track last gym state tick for ball_touched detection
     uint64_t last_gym_state_tick = 0;
     
-    ArenaWrapper(GameMode mode, float tick_rate) 
+    // Exception tracking for callbacks (for multi_step)
+    // Store exception info to be re-raised after stepping completes
+    std::exception_ptr stored_exception;
+    std::mutex exception_mutex;
+    
+    // Helper to store exception and stop simulation
+    void store_exception_and_stop() {
+        std::lock_guard<std::mutex> lock(exception_mutex);
+        if (!stored_exception) {
+            stored_exception = std::current_exception();
+            arena->Stop();
+        }
+    }
+    
+    // Helper to check and rethrow stored exception
+    void check_and_rethrow() {
+        std::lock_guard<std::mutex> lock(exception_mutex);
+        if (stored_exception) {
+            std::exception_ptr ex = stored_exception;
+            stored_exception = nullptr;
+            std::rethrow_exception(ex);
+        }
+    }
+    
+    // Clear stored exception
+    void clear_exception() {
+        std::lock_guard<std::mutex> lock(exception_mutex);
+        stored_exception = nullptr;
+    }
+    
+    // Check if has stored exception
+    bool has_exception() {
+        std::lock_guard<std::mutex> lock(exception_mutex);
+        return stored_exception != nullptr;
+    }
+    
+    ArenaWrapper(GameMode mode, float tick_rate, ArenaMemWeightMode mem_weight_mode = ArenaMemWeightMode::HEAVY) 
         : arena(nullptr, [](Arena* a) { if (a) delete a; })
     {
         // Validate tick rate (RL uses 120, but allow reasonable range)
@@ -111,7 +153,9 @@ struct ArenaWrapper {
             throw std::invalid_argument("tick_rate must be between 15 and 120");
         }
         
-        arena.reset(Arena::Create(mode, ArenaConfig{}, tick_rate));
+        ArenaConfig config{};
+        config.memWeightMode = mem_weight_mode;
+        arena.reset(Arena::Create(mode, config, tick_rate));
         setup_callbacks();
     }
     
@@ -134,7 +178,9 @@ struct ArenaWrapper {
                             "scoring_team"_a = team,
                             "data"_a = self->goal_score_data
                         );
-                    } catch (...) {}
+                    } catch (...) {
+                        self->store_exception_and_stop();
+                    }
                 }
             }, this);
         }
@@ -156,7 +202,9 @@ struct ArenaWrapper {
                             "victim"_a = nb::cast(victim, nb::rv_policy::reference),
                             "data"_a = self->car_demo_data
                         );
-                    } catch (...) {}
+                    } catch (...) {
+                        self->store_exception_and_stop();
+                    }
                 }
             }
             
@@ -171,7 +219,9 @@ struct ArenaWrapper {
                         "is_demo"_a = isDemo,
                         "data"_a = self->car_bump_data
                     );
-                } catch (...) {}
+                } catch (...) {
+                    self->store_exception_and_stop();
+                }
             }
         }, this);
         
@@ -194,7 +244,9 @@ struct ArenaWrapper {
                             "boost_pad"_a = nb::cast(pad, nb::rv_policy::reference),
                             "data"_a = self->boost_pickup_data
                         );
-                    } catch (...) {}
+                    } catch (...) {
+                        self->store_exception_and_stop();
+                    }
                 }
             }, this);
         }
@@ -212,7 +264,25 @@ struct ArenaWrapper {
     }
     
     void step(int ticks = 1) {
-        // Boost pickups are now tracked via C++ callback
+        // Clear any previous exceptions
+        clear_exception();
+        
+        // Release GIL during physics stepping for better threading performance
+        {
+            nb::gil_scoped_release release;
+            arena->Step(ticks);
+        }
+        
+        // Check and rethrow any exceptions from callbacks
+        check_and_rethrow();
+    }
+    
+    void stop() {
+        arena->Stop();
+    }
+    
+    // Step without releasing GIL (for use in multi_step where GIL is already released)
+    void step_internal(int ticks) {
         arena->Step(ticks);
     }
     
@@ -261,7 +331,9 @@ struct ArenaWrapper {
                                 "car"_a = nb::cast(car, nb::rv_policy::reference),
                                 "data"_a = self->ball_touch_data
                             );
-                        } catch (...) {}
+                        } catch (...) {
+                            self->store_exception_and_stop();
+                        }
                     }
                 }, cloned);
             }
@@ -431,6 +503,11 @@ NB_MODULE(RocketSim, m) {
         .value("NORMAL", DemoMode::NORMAL)
         .value("ON_CONTACT", DemoMode::ON_CONTACT)
         .value("DISABLED", DemoMode::DISABLED);
+
+    // ========== MemoryWeightMode enum ==========
+    nb::enum_<ArenaMemWeightMode>(m, "MemoryWeightMode")
+        .value("HEAVY", ArenaMemWeightMode::HEAVY)
+        .value("LIGHT", ArenaMemWeightMode::LIGHT);
 
     // ========== Vec class ==========
     nb::class_<Vec>(m, "Vec")
@@ -628,7 +705,40 @@ NB_MODULE(RocketSim, m) {
         .def_rw("vel", &BallState::vel)
         .def_rw("ang_vel", &BallState::angVel)
         .def_rw("rot_mat", &BallState::rotMat)
-        .def_rw("last_hit_car_id", &BallState::lastHitCarID);
+        .def_rw("last_hit_car_id", &BallState::lastHitCarID)
+        // Pickle support
+        .def("__getstate__", [](const BallState& s) {
+            return nb::make_tuple(
+                nb::make_tuple(s.pos.x, s.pos.y, s.pos.z),
+                nb::make_tuple(s.vel.x, s.vel.y, s.vel.z),
+                nb::make_tuple(s.angVel.x, s.angVel.y, s.angVel.z),
+                nb::make_tuple(
+                    nb::make_tuple(s.rotMat.forward.x, s.rotMat.forward.y, s.rotMat.forward.z),
+                    nb::make_tuple(s.rotMat.right.x, s.rotMat.right.y, s.rotMat.right.z),
+                    nb::make_tuple(s.rotMat.up.x, s.rotMat.up.y, s.rotMat.up.z)
+                ),
+                s.lastHitCarID
+            );
+        })
+        .def("__setstate__", [](BallState& s, nb::tuple t) {
+            new (&s) BallState();
+            auto pos = nb::cast<nb::tuple>(t[0]);
+            s.pos = Vec(nb::cast<float>(pos[0]), nb::cast<float>(pos[1]), nb::cast<float>(pos[2]));
+            auto vel = nb::cast<nb::tuple>(t[1]);
+            s.vel = Vec(nb::cast<float>(vel[0]), nb::cast<float>(vel[1]), nb::cast<float>(vel[2]));
+            auto angVel = nb::cast<nb::tuple>(t[2]);
+            s.angVel = Vec(nb::cast<float>(angVel[0]), nb::cast<float>(angVel[1]), nb::cast<float>(angVel[2]));
+            auto rotMat = nb::cast<nb::tuple>(t[3]);
+            auto fwd = nb::cast<nb::tuple>(rotMat[0]);
+            auto right = nb::cast<nb::tuple>(rotMat[1]);
+            auto up = nb::cast<nb::tuple>(rotMat[2]);
+            s.rotMat = RotMat(
+                Vec(nb::cast<float>(fwd[0]), nb::cast<float>(fwd[1]), nb::cast<float>(fwd[2])),
+                Vec(nb::cast<float>(right[0]), nb::cast<float>(right[1]), nb::cast<float>(right[2])),
+                Vec(nb::cast<float>(up[0]), nb::cast<float>(up[1]), nb::cast<float>(up[2]))
+            );
+            s.lastHitCarID = nb::cast<uint32_t>(t[4]);
+        });
 
     // ========== BoostPadState class ==========
     nb::class_<BoostPadState>(m, "BoostPadState")
@@ -684,7 +794,15 @@ NB_MODULE(RocketSim, m) {
                            std::optional<RotMat> rot_mat,
                            std::optional<float> boost,
                            std::optional<bool> is_on_ground,
-                           std::optional<bool> is_demoed) {
+                           std::optional<bool> is_demoed,
+                           std::optional<bool> has_jumped,
+                           std::optional<bool> has_double_jumped,
+                           std::optional<bool> has_flipped,
+                           std::optional<bool> is_flipping,
+                           std::optional<bool> is_jumping,
+                           std::optional<float> jump_time,
+                           std::optional<float> flip_time,
+                           std::optional<float> air_time_since_jump) {
             new (self) CarState();
             if (pos) self->pos = *pos;
             if (vel) self->vel = *vel;
@@ -693,9 +811,19 @@ NB_MODULE(RocketSim, m) {
             if (boost) self->boost = *boost;
             if (is_on_ground) self->isOnGround = *is_on_ground;
             if (is_demoed) self->isDemoed = *is_demoed;
+            if (has_jumped) self->hasJumped = *has_jumped;
+            if (has_double_jumped) self->hasDoubleJumped = *has_double_jumped;
+            if (has_flipped) self->hasFlipped = *has_flipped;
+            if (is_flipping) self->isFlipping = *is_flipping;
+            if (is_jumping) self->isJumping = *is_jumping;
+            if (jump_time) self->jumpTime = *jump_time;
+            if (flip_time) self->flipTime = *flip_time;
+            if (air_time_since_jump) self->airTimeSinceJump = *air_time_since_jump;
         }, "pos"_a = std::nullopt, "vel"_a = std::nullopt, "ang_vel"_a = std::nullopt,
            "rot_mat"_a = std::nullopt, "boost"_a = std::nullopt, "is_on_ground"_a = std::nullopt,
-           "is_demoed"_a = std::nullopt)
+           "is_demoed"_a = std::nullopt, "has_jumped"_a = std::nullopt, "has_double_jumped"_a = std::nullopt,
+           "has_flipped"_a = std::nullopt, "is_flipping"_a = std::nullopt, "is_jumping"_a = std::nullopt,
+           "jump_time"_a = std::nullopt, "flip_time"_a = std::nullopt, "air_time_since_jump"_a = std::nullopt)
         .def_rw("pos", &CarState::pos)
         .def_rw("rot_mat", &CarState::rotMat)
         .def_rw("vel", &CarState::vel)
@@ -743,7 +871,82 @@ NB_MODULE(RocketSim, m) {
         .def_prop_rw("world_contact_normal",
             [](const CarState& s) { return s.worldContact.contactNormal; },
             [](CarState& s, const Vec& v) { s.worldContact.contactNormal = v; })
-        .def_rw("last_controls", &CarState::lastControls);
+        .def_rw("last_controls", &CarState::lastControls)
+        // Pickle support
+        .def("__getstate__", [](const CarState& s) {
+            return nb::make_tuple(
+                // Position and orientation
+                nb::make_tuple(s.pos.x, s.pos.y, s.pos.z),
+                nb::make_tuple(s.vel.x, s.vel.y, s.vel.z),
+                nb::make_tuple(s.angVel.x, s.angVel.y, s.angVel.z),
+                nb::make_tuple(
+                    nb::make_tuple(s.rotMat.forward.x, s.rotMat.forward.y, s.rotMat.forward.z),
+                    nb::make_tuple(s.rotMat.right.x, s.rotMat.right.y, s.rotMat.right.z),
+                    nb::make_tuple(s.rotMat.up.x, s.rotMat.up.y, s.rotMat.up.z)
+                ),
+                // State flags
+                s.isOnGround, s.hasJumped, s.isJumping, s.hasDoubleJumped, s.hasFlipped, s.isFlipping,
+                // Timing
+                s.jumpTime, s.flipTime, s.airTimeSinceJump,
+                // Flip
+                nb::make_tuple(s.flipRelTorque.x, s.flipRelTorque.y, s.flipRelTorque.z),
+                s.isAutoFlipping, s.autoFlipTimer, s.autoFlipTorqueScale,
+                // Boost
+                s.boost, s.boostingTime,
+                // Supersonic
+                s.isSupersonic, s.supersonicTime,
+                // Other
+                s.handbrakeVal, s.isDemoed, s.demoRespawnTimer,
+                // Contacts
+                s.carContact.otherCarID, s.carContact.cooldownTimer,
+                s.worldContact.hasContact,
+                nb::make_tuple(s.worldContact.contactNormal.x, s.worldContact.contactNormal.y, s.worldContact.contactNormal.z)
+            );
+        })
+        .def("__setstate__", [](CarState& s, nb::tuple t) {
+            new (&s) CarState();
+            auto pos = nb::cast<nb::tuple>(t[0]);
+            s.pos = Vec(nb::cast<float>(pos[0]), nb::cast<float>(pos[1]), nb::cast<float>(pos[2]));
+            auto vel = nb::cast<nb::tuple>(t[1]);
+            s.vel = Vec(nb::cast<float>(vel[0]), nb::cast<float>(vel[1]), nb::cast<float>(vel[2]));
+            auto angVel = nb::cast<nb::tuple>(t[2]);
+            s.angVel = Vec(nb::cast<float>(angVel[0]), nb::cast<float>(angVel[1]), nb::cast<float>(angVel[2]));
+            auto rotMat = nb::cast<nb::tuple>(t[3]);
+            auto fwd = nb::cast<nb::tuple>(rotMat[0]);
+            auto right = nb::cast<nb::tuple>(rotMat[1]);
+            auto up = nb::cast<nb::tuple>(rotMat[2]);
+            s.rotMat = RotMat(
+                Vec(nb::cast<float>(fwd[0]), nb::cast<float>(fwd[1]), nb::cast<float>(fwd[2])),
+                Vec(nb::cast<float>(right[0]), nb::cast<float>(right[1]), nb::cast<float>(right[2])),
+                Vec(nb::cast<float>(up[0]), nb::cast<float>(up[1]), nb::cast<float>(up[2]))
+            );
+            s.isOnGround = nb::cast<bool>(t[4]);
+            s.hasJumped = nb::cast<bool>(t[5]);
+            s.isJumping = nb::cast<bool>(t[6]);
+            s.hasDoubleJumped = nb::cast<bool>(t[7]);
+            s.hasFlipped = nb::cast<bool>(t[8]);
+            s.isFlipping = nb::cast<bool>(t[9]);
+            s.jumpTime = nb::cast<float>(t[10]);
+            s.flipTime = nb::cast<float>(t[11]);
+            s.airTimeSinceJump = nb::cast<float>(t[12]);
+            auto flipTorque = nb::cast<nb::tuple>(t[13]);
+            s.flipRelTorque = Vec(nb::cast<float>(flipTorque[0]), nb::cast<float>(flipTorque[1]), nb::cast<float>(flipTorque[2]));
+            s.isAutoFlipping = nb::cast<bool>(t[14]);
+            s.autoFlipTimer = nb::cast<float>(t[15]);
+            s.autoFlipTorqueScale = nb::cast<float>(t[16]);
+            s.boost = nb::cast<float>(t[17]);
+            s.boostingTime = nb::cast<float>(t[18]);
+            s.isSupersonic = nb::cast<bool>(t[19]);
+            s.supersonicTime = nb::cast<float>(t[20]);
+            s.handbrakeVal = nb::cast<float>(t[21]);
+            s.isDemoed = nb::cast<bool>(t[22]);
+            s.demoRespawnTimer = nb::cast<float>(t[23]);
+            s.carContact.otherCarID = nb::cast<uint32_t>(t[24]);
+            s.carContact.cooldownTimer = nb::cast<float>(t[25]);
+            s.worldContact.hasContact = nb::cast<bool>(t[26]);
+            auto contactNormal = nb::cast<nb::tuple>(t[27]);
+            s.worldContact.contactNormal = Vec(nb::cast<float>(contactNormal[0]), nb::cast<float>(contactNormal[1]), nb::cast<float>(contactNormal[2]));
+        });
 
     // ========== MutatorConfig class ==========
     nb::class_<MutatorConfig>(m, "MutatorConfig")
@@ -773,13 +976,19 @@ NB_MODULE(RocketSim, m) {
         .def_rw("unlimited_flips", &MutatorConfig::unlimitedFlips)
         .def_rw("unlimited_double_jumps", &MutatorConfig::unlimitedDoubleJumps)
         .def_rw("demo_mode", &MutatorConfig::demoMode)
-        .def_rw("enable_team_demos", &MutatorConfig::enableTeamDemos);
+        .def_rw("enable_team_demos", &MutatorConfig::enableTeamDemos)
+        .def_rw("enable_car_car_collision", &MutatorConfig::enableCarCarCollision)
+        .def_rw("enable_car_ball_collision", &MutatorConfig::enableCarBallCollision);
 
     // ========== Ball class ==========
     nb::class_<Ball>(m, "Ball")
         .def("get_state", &Ball::GetState)
         .def("set_state", &Ball::SetState)
-        .def("get_radius", &Ball::GetRadius);
+        .def("get_radius", &Ball::GetRadius)
+        .def("get_rot", [](Ball* ball) {
+            auto rot = ball->_rigidBody.getOrientation();
+            return nb::make_tuple(rot.getX(), rot.getY(), rot.getZ(), rot.getW());
+        }, "Get ball rotation as quaternion (x, y, z, w)");
 
     // ========== BoostPad class ==========
     nb::class_<BoostPad>(m, "BoostPad")
@@ -802,10 +1011,13 @@ NB_MODULE(RocketSim, m) {
 
     // ========== Arena class (raw, for advanced use) ==========
     nb::class_<Arena>(m, "_Arena")
-        .def(nb::new_([](GameMode gameMode, float tickRate) {
-            return Arena::Create(gameMode, ArenaConfig{}, tickRate);
-        }), "game_mode"_a, "tick_rate"_a = 120.0f)
+        .def(nb::new_([](GameMode gameMode, float tickRate, ArenaMemWeightMode memWeightMode) {
+            ArenaConfig config{};
+            config.memWeightMode = memWeightMode;
+            return Arena::Create(gameMode, config, tickRate);
+        }), "game_mode"_a, "tick_rate"_a = 120.0f, "mem_weight_mode"_a = ArenaMemWeightMode::HEAVY)
         .def("step", &Arena::Step, "ticks_to_simulate"_a = 1)
+        .def("stop", &Arena::Stop)
         .def("clone", [](Arena* a) { return a->Clone(false); }, nb::rv_policy::take_ownership)
         .def("add_car", [](Arena* a, Team team, const CarConfig& config) {
             return a->AddCar(team, config);
@@ -830,6 +1042,8 @@ NB_MODULE(RocketSim, m) {
         }, nb::rv_policy::reference)
         .def("set_mutator_config", &Arena::SetMutatorConfig)
         .def("get_mutator_config", &Arena::GetMutatorConfig, nb::rv_policy::reference)
+        .def("set_car_car_collision", &Arena::SetCarCarCollision, "enable"_a = true)
+        .def("set_car_ball_collision", &Arena::SetCarBallCollision, "enable"_a = true)
         .def("reset_to_random_kickoff", &Arena::ResetToRandomKickoff, "seed"_a = -1)
         .def("is_ball_probably_going_in", &Arena::IsBallProbablyGoingIn, 
              "max_time"_a = 2.0f, "extra_margin"_a = 0.0f, "goal_team_out"_a = nullptr)
@@ -842,8 +1056,10 @@ NB_MODULE(RocketSim, m) {
 
     // ========== ArenaWrapper class (with RLGym features) ==========
     nb::class_<ArenaWrapper>(m, "Arena")
-        .def(nb::init<GameMode, float>(), "game_mode"_a, "tick_rate"_a = 120.0f)
+        .def(nb::init<GameMode, float, ArenaMemWeightMode>(), 
+             "game_mode"_a, "tick_rate"_a = 120.0f, "mem_weight_mode"_a = ArenaMemWeightMode::HEAVY)
         .def("step", &ArenaWrapper::step, "ticks_to_simulate"_a = 1)
+        .def("stop", &ArenaWrapper::stop)
         .def("clone", [](ArenaWrapper* a, bool copy_callbacks) { return a->clone(copy_callbacks); },
              nb::rv_policy::take_ownership, "copy_callbacks"_a = false)
         .def("add_car", &ArenaWrapper::add_car, "team"_a, "config"_a, nb::rv_policy::reference)
@@ -887,6 +1103,12 @@ NB_MODULE(RocketSim, m) {
         .def("get_mutator_config", [](ArenaWrapper* a) -> const MutatorConfig& {
             return a->arena->GetMutatorConfig();
         }, nb::rv_policy::reference)
+        .def("set_car_car_collision", [](ArenaWrapper* a, bool enable) {
+            a->arena->SetCarCarCollision(enable);
+        }, "enable"_a = true)
+        .def("set_car_ball_collision", [](ArenaWrapper* a, bool enable) {
+            a->arena->SetCarBallCollision(enable);
+        }, "enable"_a = true)
         .def("reset_to_random_kickoff", &ArenaWrapper::reset_to_random_kickoff, "seed"_a = -1)
         .def("is_ball_probably_going_in", [](ArenaWrapper* a, float maxTime, float extraMargin, Team* goalTeamOut) {
             return a->arena->IsBallProbablyGoingIn(maxTime, extraMargin, goalTeamOut);
@@ -971,7 +1193,9 @@ NB_MODULE(RocketSim, m) {
                                 "car"_a = nb::cast(car, nb::rv_policy::reference),
                                 "data"_a = self->ball_touch_data
                             );
-                        } catch (...) {}
+                        } catch (...) {
+                            self->store_exception_and_stop();
+                        }
                     }
                 }, a);
             } else {
@@ -997,7 +1221,102 @@ NB_MODULE(RocketSim, m) {
         }, "Send arena state to RLViser for rendering (uses global socket)")
         .def("get_game_state", [](ArenaWrapper* a) {
             return RLViser::GameState::from_arena(a->arena.get());
-        }, "Get the current game state as an RLViser GameState object");
+        }, "Get the current game state as an RLViser GameState object")
+        // ====== MULTI-STEP (PARALLEL SIMULATION) ======
+        .def_static("multi_step", [](nb::list arenas_list, int ticks) {
+            // Convert list to vector and validate
+            std::vector<ArenaWrapper*> arenas;
+            std::unordered_set<ArenaWrapper*> seen;
+            arenas.reserve(nb::len(arenas_list));
+            
+            for (size_t i = 0; i < nb::len(arenas_list); ++i) {
+                nb::object item = arenas_list[i];
+                if (!nb::isinstance<ArenaWrapper>(item)) {
+                    throw std::runtime_error("Unexpected type in arenas list - expected Arena objects");
+                }
+                ArenaWrapper* arena = nb::cast<ArenaWrapper*>(item);
+                if (seen.count(arena)) {
+                    throw std::runtime_error("Duplicate arena detected in multi_step");
+                }
+                seen.insert(arena);
+                arenas.push_back(arena);
+            }
+            
+            if (arenas.empty()) {
+                return;
+            }
+            
+            // Clear exceptions before stepping
+            for (auto* arena : arenas) {
+                arena->clear_exception();
+            }
+            
+            // For small numbers of arenas or single tick, just step sequentially
+            // Thread overhead isn't worth it for small workloads
+            const size_t PARALLEL_THRESHOLD = 4;
+            
+            if (arenas.size() < PARALLEL_THRESHOLD) {
+                // Sequential stepping - still release GIL for better Python thread performance
+                nb::gil_scoped_release release;
+                for (auto* arena : arenas) {
+                    arena->step_internal(ticks);
+                }
+            } else {
+                // Parallel stepping with thread pool
+                // Use hardware_concurrency as hint, cap at reasonable value
+                const unsigned int max_threads = std::min(
+                    static_cast<unsigned int>(arenas.size()),
+                    std::max(1u, std::thread::hardware_concurrency())
+                );
+                
+                // Release GIL before spawning threads
+                nb::gil_scoped_release release;
+                
+                // Use futures for parallel execution
+                std::vector<std::future<void>> futures;
+                futures.reserve(arenas.size());
+                
+                // Simple work distribution - each arena gets its own task
+                // Could use work stealing for better load balancing in future
+                for (auto* arena : arenas) {
+                    futures.emplace_back(std::async(std::launch::async, [arena, ticks]() {
+                        arena->step_internal(ticks);
+                    }));
+                }
+                
+                // Wait for all to complete
+                for (auto& f : futures) {
+                    f.get();
+                }
+            }
+            
+            // Re-acquire GIL (automatic when release goes out of scope)
+            // Check for and rethrow any exceptions from callbacks
+            for (auto* arena : arenas) {
+                if (arena->has_exception()) {
+                    // Rethrow first exception found
+                    arena->check_and_rethrow();
+                }
+            }
+        }, "arenas"_a, "ticks"_a = 1,
+           R"(Step multiple arenas in parallel.
+
+This method releases the GIL and steps all provided arenas concurrently
+using multiple threads for improved performance.
+
+Args:
+    arenas: List of Arena objects to step
+    ticks: Number of ticks to simulate (default: 1)
+
+Raises:
+    RuntimeError: If duplicate arenas are detected or non-Arena objects in list
+    Exception: Re-raises any exception from callbacks (simulation stops on exception)
+
+Note:
+    - Each arena must be unique (no duplicates)
+    - If a callback raises an exception, the arena stops and the exception is re-raised
+    - For best performance with many arenas, use MemoryWeightMode.LIGHT
+)");
 
     // ========== Car config presets ==========
     m.attr("CAR_CONFIG_OCTANE") = &CAR_CONFIG_OCTANE;

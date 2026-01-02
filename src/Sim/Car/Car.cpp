@@ -245,13 +245,17 @@ void Car::_BulletSetup(GameMode gameMode, btDynamicsWorld* bulletWorld, const Mu
 	// Disable gyroscopic force
 	_rigidBody.m_rigidbodyFlags = 0;
 	
-	// We want our car and our suspension rays to collide with the dropshot floor
+	// We want our car suspension rays to collide with the dropshot floor
 	int extraCollisionMask = CollisionMasks::DROPSHOT_FLOOR;
 
-	// Add rigidbody to world
-	bulletWorld->addRigidBody(
-		&_rigidBody, btBroadphaseProxy::DefaultFilter | extraCollisionMask, btBroadphaseProxy::AllFilter
-	);
+	// Calculate collision filter mask based on mutator config
+	int collisionMask = btBroadphaseProxy::AllFilter;
+	if (!mutatorConfig.enableCarCarCollision)
+		collisionMask &= ~btBroadphaseProxy::CharacterFilter;
+
+	// Add rigidbody to world with CharacterFilter group for car-car collision control
+	// Note: CharacterFilter is used as the group so we can selectively disable car-car collisions
+	bulletWorld->addRigidBody(&_rigidBody, btBroadphaseProxy::CharacterFilter, collisionMask);
 
 	{ // Set up actual vehicle stuff
 		_bulletVehicleRaycaster = btDefaultVehicleRaycaster(bulletWorld);

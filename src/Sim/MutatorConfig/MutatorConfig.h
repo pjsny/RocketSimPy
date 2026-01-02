@@ -69,6 +69,9 @@ struct MutatorConfig {
 	DemoMode demoMode = DemoMode::NORMAL;
 	bool enableTeamDemos = false;
 
+	bool enableCarCarCollision = true;
+	bool enableCarBallCollision = true;
+
 	// Only used if the game mode has soccar goals (i.e. soccar, heatseeker, snowday)
 	float goalBaseThresholdY = RLConst::SOCCAR_GOAL_SCORE_BASE_THRESHOLD_Y;
 
@@ -85,6 +88,6 @@ jumpImmediateForce, boostAccelGround, boostAccelAir, boostUsedPerSecond, respawn
 carSpawnBoostAmount, bumpCooldownTime, boostPadCooldown_Big, boostPadCooldown_Small, \
 ballHitExtraForceScale, bumpForceScale, ballRadius, unlimitedFlips, unlimitedDoubleJumps, \
 rechargeBoostEnabled, rechargeBoostPerSecond, rechargeBoostDelay, \
-demoMode, enableTeamDemos, goalBaseThresholdY
+demoMode, enableTeamDemos, enableCarCarCollision, enableCarBallCollision, goalBaseThresholdY
 
 RS_NS_END
