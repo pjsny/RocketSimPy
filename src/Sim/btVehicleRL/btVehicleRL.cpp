@@ -70,11 +70,6 @@ void btVehicleRL::updateWheelTransform(int wheelIndex) {
 	const btVector3& right = wheel.m_raycastInfo.m_wheelAxleWS;
 	btVector3 fwd = up.cross(right);
 	fwd = fwd.normalize();
-	//	up = right.cross(fwd);
-	//	up.normalize();
-
-	btQuaternion steeringOrn(up, wheel.m_steerAngle);
-	btMatrix3x3 steeringMat(steeringOrn);
 
 	btMatrix3x3 basis2;
 	basis2[0][m_indexRightAxis] = -right[0];
@@ -88,7 +83,16 @@ void btVehicleRL::updateWheelTransform(int wheelIndex) {
 	basis2[0][m_indexForwardAxis] = fwd[0];
 	basis2[1][m_indexForwardAxis] = fwd[1];
 	basis2[2][m_indexForwardAxis] = fwd[2];
-	wheel.m_worldTransform.setBasis(steeringMat * basis2);
+
+	// Fast-path: skip quaternion/matrix multiplication when not steering (avoids sin/cos)
+	if (wheel.m_steerAngle == 0) {
+		wheel.m_worldTransform.setBasis(basis2);
+	} else {
+		btQuaternion steeringOrn(up, wheel.m_steerAngle);
+		btMatrix3x3 steeringMat(steeringOrn);
+		wheel.m_worldTransform.setBasis(steeringMat * basis2);
+	}
+	
 	wheel.m_worldTransform.setOrigin(
 		wheel.m_raycastInfo.m_hardPointWS + wheel.m_raycastInfo.m_wheelDirectionWS * wheel.m_raycastInfo.m_suspensionLength);
 }
@@ -118,7 +122,8 @@ void btVehicleRL::updateWheelTransformsWS(btWheelInfoRL& wheel) {
 }
 
 float btVehicleRL::rayCast(btWheelInfoRL& wheel) {
-	updateWheelTransformsWS(wheel);
+	// NOTE: updateWheelTransformsWS already called by updateWheelTransform before rayCast
+	// Don't call it again - the chassis transform hasn't changed
 
 	float depth = -1;
 
